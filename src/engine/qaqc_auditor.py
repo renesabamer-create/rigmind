@@ -5,6 +5,7 @@ import urllib.request
 import difflib
 from typing import List, Dict, Any, Tuple, Optional
 from src.engine.learning_memory import classify_operational_domain
+from src.engine.chronology import parse_raw_timeline
 
 # ==============================================================================
 # ELITE SPANISH ENGINEERING AUDIT SYSTEM PROMPT (DeepSeek V3, GPT-4o, Claude 3.5)
@@ -16,10 +17,14 @@ Tu misión es transformar notas crudas, informales o desordenadas de campo en es
 DIRECTIVAS OPERACIONALES ESTRICTAS:
 1. PROTOCOLO DE CERO OMISIÓN DE DATOS:
    Conserva CADA detalle, maniobra, volumen, presión, profundidad, tiempo, herramienta, número de serie o junta. NUNCA resumas, sintetices o elimines actividades.
-2. CRONOLOGÍA Y TIEMPOS OPERACIONALES:
-   - Toda actividad debe tener un rango horario claro hora por hora (ej. "00:00 - 01:00: ...", "01:00 - 01:30: ...").
+2. CRONOLOGÍA Y TIEMPOS OPERACIONALES (RECONOCIMIENTO DE INTERVALOS Y HITOS SECUENCIALES):
+   - Reconoce ambos formatos de registro de tiempo usados en campo:
+     a) MODO INTERVALO (HH:MM - HH:MM): Cada actividad tiene hora de inicio y fin explícita.
+     b) MODO SECUENCIAL (Solo HH:MM): Si cada línea solo tiene la hora de inicio (ej. "01:00 Inicia bombeo" y luego "02:30 Termina bombeo"), la hora de fin es el inicio de la siguiente actividad. Debes transformar cada evento a formato estándar IADC de rango: "01:00 - 02:30: Inicia bombeo...". La última actividad concluye a las 24:00 o fin de turno.
    - Si la primera actividad no tiene hora asignada (ej. "Personal toma de alimentos y descanso"), asígnale el rango estándar "00:00 - 01:00: ".
-   - Elimina líneas huérfanas de horas (ej. si "01:00 - 01:30" está solo en una línea, únelo con la actividad siguiente).
+   - Une líneas huérfanas de horas (ej. si "01:00 - 01:30" está solo en una línea, únelo con la actividad siguiente).
+   - Agrupa notas y viñetas multilínea debajo de su respectivo intervalo horario sin romper párrafos.
+   - NO agregues títulos decorativos ni encabezados artificiales al inicio del texto (NO escribas "REPORTE TÉCNICO DE OPERACIONES", "DOR POZO X", etc.); inicia directamente con las líneas de eventos ("00:00 - 01:00: ...") para preservar la correspondencia limpia y el diff visual con el original.
 3. CORRECCIÓN ORTOGRÁFICA Y TIPOGRÁFICA DE CAMPO:
    - Corrige errores típicos de tipeo en taladro:
      "pup joi t" -> "pup joint de manejo"
@@ -38,11 +43,20 @@ DIRECTIVAS OPERACIONALES ESTRICTAS:
 6. FORMATO DE SALIDA (EXCLUSIVAMENTE JSON):
 Debes responder ÚNICAMENTE un bloque JSON válido con este esquema:
 {
-  "corrected_spanish": "Reporte completo saneado y estructurado en español hora por hora...",
+  "corrected_spanish": "Líneas cronológicas saneadas directamente en español hora por hora (sin títulos decorativos)...",
   "agent_findings": [
     {
-      "agent": "nombre-del-agente-especialista",
+      "agent": "nombre-del-agente-especialista (ej. chronology-time-reconciliation-auditor, tally-mechanics-engineer, well-integrity-bop-specialist, rig-move-logistics-specialist, well-control-pna-specialist, esp-artificial-lift-specialist, hse-npt-compliance-auditor, lead-intervention-director, oilfield-translator-editor)",
       "severity": "CRITICAL" | "WARNING" | "INFO" | "SUCCESS",
+      "badge": "EMOJI + TITULO DE ALERTA",
+      "message": "Explicación técnica detallada de lo detectado, corregido o norma aplicable."
+    }
+  ],
+  "learning_tips": [
+    "Consejo pedagógico 1",
+    "Consejo pedagógico 2"
+  ]
+}
       "badge": "EMOJI + TITULO DE ALERTA",
       "message": "Explicación técnica detallada de lo detectado, corregido o norma aplicable."
     }
@@ -103,6 +117,11 @@ def offline_polish_spanish(raw_text: str) -> Tuple[str, List[Dict[str, Any]], Li
     text = raw_text
     findings = []
     learning_tips = []
+
+    # Check if input is sequential point-in-time mode (only start times)
+    chrono_info = parse_raw_timeline(text)
+    if chrono_info.get("mode") == "sequential_inferred" and chrono_info.get("reconstructed_narrative"):
+        text = chrono_info["reconstructed_narrative"]
 
     # 1. Missing midnight hour interval
     if re.match(r"^\s*(?:personal\s+)?toma\s+de\s+alimentos", text, re.IGNORECASE):
@@ -351,6 +370,31 @@ def audit_operations_text(raw_text: str, api_key: str = None, provider: str = "a
         "message": f"Contenido analizado por el Director de Operaciones como '{classification['title']}'. Especialista asignado: [{classification['specialist']}]. Se suprimen sugerencias cruzadas no relacionadas para mantener estricto foco técnico."
     })
 
+    # Chronology & 24h Time Balance Audit (Agent: chronology-time-reconciliation-auditor)
+    chrono_check = parse_raw_timeline(raw_text)
+    if chrono_check.get("mode") == "sequential_inferred":
+        findings.append({
+            "agent": "chronology-time-reconciliation-auditor",
+            "severity": "INFO",
+            "badge": "⏱️ CRONOLOGÍA SECUENCIAL (HITOS -> INTERVALOS IADC)",
+            "message": "Se detectó formato de hitos cronológicos (solo hora de inicio). El especialista en tiempos infirió las horas de fin a partir de la siguiente actividad y reestructuró cada evento en rangos estándar IADC (HH:MM - HH:MM)."
+        })
+    if chrono_check.get("gaps"):
+        for g in chrono_check["gaps"]:
+            findings.append({
+                "agent": "chronology-time-reconciliation-auditor",
+                "severity": "WARNING",
+                "badge": f"⏱️ BRECHA OPERACIONAL DE {g['gap_hours']} H",
+                "message": f"Se detectó una brecha de {g['gap_hours']} h sin registro de operaciones entre las {g['from']} y las {g['to']}. En auditoría IADC/SPE, todo tiempo no documentado debe clasificarse formalmente como Standby o NPT."
+            })
+    if chrono_check.get("is_24_closed"):
+        findings.append({
+            "agent": "chronology-time-reconciliation-auditor",
+            "severity": "SUCCESS",
+            "badge": "⏱️ BALANCE 24H VERIFICADO",
+            "message": "Cierre exacto de 24.0 horas del día operacional verificado. Apto para conciliación y corte de facturación con la operadora."
+        })
+
     corrected_text = raw_text
     ai_audit_success = False
 
@@ -362,6 +406,8 @@ def audit_operations_text(raw_text: str, api_key: str = None, provider: str = "a
             ai_res = call_ai_spanish_audit(raw_text, api_key=api_key, provider=provider, well_name=well_name)
             if ai_res and "corrected_spanish" in ai_res and ai_res["corrected_spanish"].strip():
                 corrected_text = ai_res["corrected_spanish"].strip()
+                # Clean accidental banner title injected by AI if any
+                corrected_text = re.sub(r"^(?:REPORTE\s+T[EÉ]CNICO[^\n]*|DOR[^\n]*)\n+", "", corrected_text, flags=re.IGNORECASE).strip()
                 if "agent_findings" in ai_res and isinstance(ai_res["agent_findings"], list):
                     findings.extend(ai_res["agent_findings"])
                 if "learning_tips" in ai_res and isinstance(ai_res["learning_tips"], list):

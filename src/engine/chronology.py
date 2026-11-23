@@ -1,129 +1,163 @@
 import re
-from datetime import datetime, timedelta
+from typing import List, Dict, Any, Tuple, Optional
 
-def parse_time_str(t_str: str):
-    """Parses HH:MM or HH:MM:SS string to minutes from midnight."""
+def parse_time_minutes(t_str: str) -> Optional[int]:
+    """Parses HH:MM string to integer minutes from midnight."""
+    if not t_str:
+        return None
     t_str = t_str.strip()
-    parts = t_str.split(":")
-    if len(parts) >= 2:
-        h = int(parts[0])
-        m = int(parts[1])
-        return h * 60 + m
+    m = re.match(r"^(\d{1,2}):(\d{2})", t_str)
+    if m:
+        h, mn = int(m.group(1)), int(m.group(2))
+        return h * 60 + mn
     return None
 
-def format_minutes_to_time(minutes: int) -> str:
-    """Formats minutes from midnight to HH:MM."""
-    h = (minutes // 60) % 24
-    m = minutes % 60
-    return f"{h:02d}:{m:02d}"
+def minutes_to_hhmm(mins: int) -> str:
+    """Formats minutes from midnight to HH:MM (supports 24:00)."""
+    if mins == 1440:
+        return "24:00"
+    h = (mins // 60) % 24
+    mn = mins % 60
+    return f"{h:02d}:{mn:02d}"
 
-def parse_raw_timeline(text: str):
+def calculate_duration(t_from: str, t_to: str) -> float:
+    """Calculates duration in decimal hours between two time strings."""
+    m_from = parse_time_minutes(t_from)
+    m_to = 1440 if t_to in ("24:00", "24") else parse_time_minutes(t_to)
+    
+    if m_from is None or m_to is None:
+        return 0.0
+    
+    if m_to < m_from:
+        # Crosses midnight (e.g. 23:00 to 01:00)
+        m_to += 1440
+        
+    diff = m_to - m_from
+    return round(diff / 60.0, 2)
+
+def parse_raw_timeline(text: str) -> Dict[str, Any]:
     """
-    Parses field text lines. Supports formats like:
-    - DATE \\t FROM \\t TO \\t DUR \\t OPERATION
-    - HH:MM - HH:MM: OPERATION
-    - HH:MM \\t HH:MM \\t OPERATION
+    MASTER CHRONOLOGY & 24H RECONCILIATION ENGINE
+    (Agent: chronology-time-reconciliation-auditor)
+    
+    Intelligently audits and reconciles petroleum operational timelines:
+    1. Interval Mode: 'HH:MM - HH:MM: Operation' or multi-line under 'HH:MM - HH:MM'
+    2. Sequential Point-in-Time Mode: 'HH:MM Operation' where end time is the start of next activity!
+    3. Multi-line consolidation: Groups subsequent notes and bullets under their active hour block.
+    4. Chronological Gap Detection: Identifies unaccounted dead hours between activities.
+    5. 24.0h Balance Verification: Checks if full 24h operational day is closed.
     """
     lines = text.strip().split("\n")
-    events = []
-    total_duration = 0.0
     
-    # Pattern 1: Tab-separated table (DATE, FROM, TO, DUR, OPERATION)
-    tab_pattern = re.compile(r"^(\d{1,2}/\d{1,2}/\d{4})?\s*(\d{1,2}:\d{2}(?::\d{2})?)\s+(\d{1,2}:\d{2}(?::\d{2})?)\s+([\d.]+)?\s*(.*)$")
-    # Pattern 2: Interval with dash (07:00 - 08:30: Description)
-    dash_pattern = re.compile(r"^(\d{1,2}:\d{2})\s*[-–]\s*(\d{1,2}:\d{2})[:\s]*(.*)$")
+    interval_regex = re.compile(r"^(\d{1,2}:\d{2})\s*(?:[-–]|a|to)\s*(\d{1,2}:\d{2})[:\s]*(.*)$", re.IGNORECASE)
+    single_time_regex = re.compile(r"^(\d{1,2}:\d{2})[:\s]*(.*)$")
     
-    for idx, raw_line in enumerate(lines):
+    raw_blocks: List[Dict[str, Any]] = []
+    current_block: Optional[Dict[str, Any]] = None
+    
+    for raw_line in lines:
         line = raw_line.strip()
         if not line or line.upper().startswith("DATE") or line.upper().startswith("FROM"):
             continue
             
-        m_dash = dash_pattern.match(line)
-        if m_dash:
-            t_from, t_to, desc = m_dash.groups()
-            dur = calculate_duration(t_from, t_to)
-            events.append({
-                "id": idx + 1,
-                "from": t_from,
-                "to": t_to,
-                "duration": dur,
-                "description": desc.strip(),
-                "raw": line
-            })
-            total_duration += dur
+        m_int = interval_regex.match(line)
+        if m_int:
+            t_start, t_end, rest = m_int.groups()
+            current_block = {
+                "type": "interval",
+                "start": t_start,
+                "end": t_end,
+                "lines": [rest.strip()] if rest.strip() else []
+            }
+            raw_blocks.append(current_block)
             continue
             
-        # Try tab or multi-space splitting
-        parts = [p.strip() for p in re.split(r"\t+|\s{2,}", line) if p.strip()]
-        if len(parts) >= 3:
-            # Check if first or second is a time
-            date_part = ""
-            start_idx = 0
-            if re.match(r"^\d{1,2}/\d{1,2}/\d{4}$", parts[0]):
-                date_part = parts[0]
-                start_idx = 1
+        m_single = single_time_regex.match(line)
+        if m_single:
+            t_start, rest = m_single.groups()
+            current_block = {
+                "type": "single",
+                "start": t_start,
+                "end": None,
+                "lines": [rest.strip()] if rest.strip() else []
+            }
+            raw_blocks.append(current_block)
+            continue
+            
+        # Multiline notes belonging to current block
+        if current_block:
+            current_block["lines"].append(line)
+        else:
+            # Content before any timestamp! (e.g. "Personal toma de alimentos")
+            current_block = {
+                "type": "no_time",
+                "start": "00:00",
+                "end": None,
+                "lines": [line]
+            }
+            raw_blocks.append(current_block)
+            
+    # Process blocks, infer missing end times, calculate durations and detect gaps
+    events = []
+    total_duration = 0.0
+    gaps = []
+    
+    for i, b in enumerate(raw_blocks):
+        t_start = b["start"]
+        t_end = b.get("end")
+        desc = " ".join([l for l in b["lines"] if l]).strip()
+        
+        # If no end time, infer from the next activity's start time!
+        if not t_end:
+            if i + 1 < len(raw_blocks):
+                t_end = raw_blocks[i + 1]["start"]
+            else:
+                # Last event of shift
+                t_end = "24:00"
                 
-            if len(parts) > start_idx + 1 and re.match(r"^\d{1,2}:\d{2}", parts[start_idx]) and re.match(r"^\d{1,2}:\d{2}", parts[start_idx+1]):
-                t_from = parts[start_idx]
-                t_to = parts[start_idx+1]
-                dur_val = None
-                desc = ""
-                if len(parts) > start_idx + 2:
-                    try:
-                        dur_val = float(parts[start_idx+2].replace(",", "."))
-                        desc = " ".join(parts[start_idx+3:]) if len(parts) > start_idx + 3 else ""
-                    except ValueError:
-                        desc = " ".join(parts[start_idx+2:])
-                        dur_val = calculate_duration(t_from, t_to)
-                else:
-                    dur_val = calculate_duration(t_from, t_to)
-                    
-                events.append({
-                    "id": idx + 1,
-                    "date": date_part,
-                    "from": t_from,
-                    "to": t_to,
-                    "duration": dur_val,
-                    "description": desc,
-                    "raw": line
-                })
-                total_duration += dur_val
-                continue
-
-        # Fallback: line without explicit time tags
+        dur = calculate_duration(t_start, t_end)
+        total_duration += dur
+        
         events.append({
-            "id": idx + 1,
-            "from": "",
-            "to": "",
-            "duration": 0.0,
-            "description": line,
-            "raw": line
+            "id": i + 1,
+            "from": t_start,
+            "to": t_end,
+            "duration": dur,
+            "description": desc,
+            "raw": f"{t_start} - {t_end}: {desc}"
         })
+        
+        # Detect gaps between current end time and next start time
+        if i + 1 < len(raw_blocks):
+            next_start = raw_blocks[i + 1]["start"]
+            m_curr_end = 1440 if t_end == "24:00" else parse_time_minutes(t_end)
+            m_next_start = parse_time_minutes(next_start)
+            if m_curr_end is not None and m_next_start is not None and m_next_start > m_curr_end:
+                gap_hrs = round((m_next_start - m_curr_end) / 60.0, 2)
+                gaps.append({
+                    "from": t_end,
+                    "to": next_start,
+                    "gap_hours": gap_hrs
+                })
 
     is_24_closed = abs(total_duration - 24.0) < 0.15
     balance_status = "BALANCED" if is_24_closed else ("UNDER" if total_duration < 24.0 else "OVER")
+    
+    # Reconstruct standard IADC formatted narrative
+    reconstructed_lines = []
+    for ev in events:
+        if ev["description"]:
+            reconstructed_lines.append(f"{ev['from']} - {ev['to']}: {ev['description']}")
+            
+    reconstructed_narrative = "\n".join(reconstructed_lines)
 
     return {
         "events": events,
         "total_duration": round(total_duration, 2),
         "is_24_closed": is_24_closed,
         "balance_status": balance_status,
-        "variance_hours": round(24.0 - total_duration, 2)
+        "variance_hours": round(24.0 - total_duration, 2),
+        "gaps": gaps,
+        "mode": "sequential_inferred" if any(b["type"] == "single" for b in raw_blocks) else "interval_explicit",
+        "reconstructed_narrative": reconstructed_narrative
     }
-
-def calculate_duration(t_from: str, t_to: str) -> float:
-    """Calculates duration in decimal hours between two time strings."""
-    m_from = parse_time_str(t_from)
-    m_to = parse_time_str(t_to)
-    if m_from is None or m_to is None:
-        return 0.0
-    
-    if m_to == 0 and m_from > 0:
-        # e.g., 23:00 to 0:00 or 24:00
-        m_to = 24 * 60
-    elif m_to < m_from:
-        # Passes midnight
-        m_to += 24 * 60
-        
-    diff = m_to - m_from
-    return round(diff / 60.0, 2)
