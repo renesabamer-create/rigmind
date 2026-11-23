@@ -45,7 +45,8 @@ MANDATORY DIRECTIVES:
    - "check list diario" -> "conducted daily tool and equipment inspection"
    - "carta barton" / "carta bartón" -> "Barton round pressure chart recorder"
    - "toque de TOC" / "verifico TOC con 10 klb" -> "tagged TOC w/ 10 klb"
-6. PRESERVE NUMERICAL DATA & TIMELINES EXACTLY: Keep the exact hours (e.g. '00:00 - 01:00') and all weights, depths, pressures, and volumes."""
+6. PRESERVE NUMERICAL DATA & TIMELINES EXACTLY: Keep the exact hours (e.g. '00:00 - 01:00') and all weights, depths, pressures, and volumes.
+7. CLEAN HANDLING OF INLINE PLACEHOLDERS: If the Spanish narrative contains uncompleted bracketed placeholders (such as '[___ bpm]', '[TOTAL JTS]', '[SWD: ___ klb]', or '[especificar ...]'), preserve the brackets with natural English field labels (e.g. '[TOTAL JTS]', '[specify BHA type / objective: e.g. fishing / completion]', '[SWD: ___ klb]', '[___ bpm]') or omit placeholder instructions if actual engineering values have already been filled in. Never leave raw Spanish words inside bracketed engineering placeholders."""
 
 MODELS_CASCADE = [
     "gemini-3.5-flash-lite",
@@ -268,6 +269,17 @@ CONTEXTUAL_PATTERNS: List[Tuple[str, str]] = [
         r"con\s+standing\s+valve\s+instalada,?\s*raz[oó]n\s+por\s+la\s+cual\s+no\s+fue\s+posible\s+drenar\s+tbg\s+cuando\s+se\s+lanz[oó]\s+la\s+barra\s+para\s+romper\s+los?\s+pin\s+de\s+la\s+drain\s+valve\.?",
         "Standing valve installed in seating nipple, preventing tubing drainage when bar was dropped to shear drain valve pin."
     ),
+
+    # -------------------------------------------------------------
+    # 11. Guided Golden Paragraph Placeholders Translation
+    # -------------------------------------------------------------
+    (r"\[especificar\s+tipo\s+de\s+bha\s+y\s+objetivo:?\s*(.*?)\]", r"[specify BHA type / objective: \1]"),
+    (r"\[especificar:\s*rosca\s+ej\.\s*eue\s*8rd,?\s*peso:\s*___\s*lb/ft,?\s*grado:\s*___\]", r"[specify: thread e.g. EUE 8RD, weight: ___ lb/ft, grade: ___]"),
+    (r"\[especificar\s+tubular:?\s*(.*?)\]", r"[specify tubular: \1]"),
+    (r"condici[oó]n\s+de\s+llenado:\s*\[tuber[ií]a\s+llena/seca,?\s*trip\s*tank:\s*___\s*bbl\]", r"hole fill status: [wet/dry string, trip tank: ___ bbl]"),
+    (r"condici[oó]n\s+de\s+sarta:\s*\[tuber[ií]a\s+llena/seca\]", r"string condition: [wet/dry string]"),
+    (r"condici[oó]n\s+de\s+sarta:\s*\[tuber[ií]a\s+llena\s*/\s*seca\]", r"string condition: [wet/dry string]"),
+    (r"\[especificar\s+fluido:?\s*agua\s+industrial\s*/\s*salmuera\]", r"[specify fluid: industrial water / brine]"),
     (r"desacople\s+de\s+sarta\s+esp", "Decoupled ESP downhole assembly"),
     (r"tom[oó]\s+medidas\s+el[eé]ctricas\s+antes\s+de\s+desacople\s+esp:", "Recorded electrical measurements prior to ESP decouple:"),
     (r"balanceado\s+con\s+falla\s+a\s+tierra", "balanced with ground fault to earth"),
@@ -288,6 +300,13 @@ CONTEXTUAL_PATTERNS: List[Tuple[str, str]] = [
 
 # Word-Level Lexicon (Strict technical terms - NO loose standalone prepositions)
 WORD_REPLACEMENTS: List[Tuple[str, str]] = [
+    (r"\ben\s+sencillos\b", "in singles"),
+    (r"\ben\s+dobles\b", "in doubles"),
+    (r"\ba\s+rack\b", "to rack"),
+    (r"\ba\s+racks\b", "to rack"),
+    (r"\ba\s+peine\b", "to derrick fingers"),
+    (r"\bcon\s+tbg\b", "w/ TBG"),
+    (r"\bcon\s+tuber[ií]a\b", "w/ tubing"),
     (r"\bmismo\s+pad\b", "same pad"),
     (r"\bmisma\s+locaci[oó]n\b", "same location"),
     (r"\bequipo\s+de\s+workover\b", "workover rig"),

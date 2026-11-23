@@ -48,7 +48,29 @@ DIRECTIVAS OPERACIONALES ESTRICTAS:
    d) PESOS DE SARTA EN MOVIMIENTO (HOISTING): Exige peso subiendo (SWU / PUW) y peso bajando (SWD / SOW) en klb para auditar arrastre de pozo (drag = PUW - SWD).
    e) MODO DE MANIOBRA: Exige detallar si se maniobra "quebrando en sencillos a rack" o "paradas en dobles a peine".
    f) CONTROL DE POZO Y LLENADO (API RP 59): Exige indicar si se saca con "tubería llena" o "tubería seca", y el monitoreo de reposición de fluido en anular / tanque de viaje (trip tank) para reemplazar el volumen de desplazamiento del acero y prevenir pistoneo (swabbing / kick).
-7. FORMATO DE SALIDA (EXCLUSIVAMENTE JSON):
+7. REGLA DE RECONSTRUCCIÓN DE PÁRRAFO COMPLETO DE INGENIERÍA (GOLDEN PARAGRAPH EXPANSION):
+   Cuando una línea del reporte crudo sea escueta, incompleta o le falten datos esenciales para la certificación técnica, NO te limites a una corrección cosmética de palabras aisladas. DEBES RECONSTRUIR LA ORACIÓN COMPLETA en el formato canónico de ingeniería petrolera SPE/IADC, insertando los parámetros faltantes entre corchetes claramente rotulados `[CAMPO FALTANTE]` para que el usuario solo tenga que rellenar los datos de su libreta:
+   a) EN CORRIDAS Y SACADAS DE TUBERÍA (RIH / POOH / PULLING):
+      - Si escriben: "RIH BHA No. 1 con TBG 2-7/8\" en sencillos desde superficie hasta 835.60 ft (26 Jts)."
+        Debes generar:
+        "RIH BHA No. 1 [especificar tipo de BHA y objetivo: ej. pesca / completamiento / limpieza] con TBG 2-7/8\" [especificar: rosca ej. EUE 8RD, peso: ___ lb/ft, grado: ___] en sencillos desde superficie hasta 835.60 ft (26/[TOTAL JTS] jtas), avance: [___]%, SWD: [___] klb, Vel: [___] jts/h, condición de llenado: [tubería llena/seca, reposición en trip tank: ___ bbl]."
+      - Si escriben: "Se retiran 3 juntas de tubería retirando mls joints y overcoupling."
+        Debes generar:
+        "POOH [especificar tubular: ej. TBG 3-1/2\" 9.3 lb/ft N-80 EUE] quebrando en sencillos a rack desde [___ ft] hasta [___ ft], retirando 3 juntas (3/[TOTAL JTS] jtas), avance: [___]%, retirando MLE (cable BES) y overcouplings con superbandas. SWU: [___] klb, SWD: [___] klb, Vel: [___] jts/h, condición de sarta: [tubería llena/seca]."
+      - Si escriben: "Se continúa sacando tubería hasta la junta #23 retirando mls joints y overcoupling, en la junta #21 a 5 FT de la base sale empalme de cable."
+        Debes generar:
+        "Continuó POOH [especificar tubular: ej. TBG 3-1/2\" 9.3 lb/ft N-80 EUE] con tubería [llena / seca] quebrando en sencillos a rack desde [___ ft] hasta [___ ft] retirando juntas hasta acumulado (23/[TOTAL JTS] jtas, avance: [___]%), retirando MLE y overcouplings con superbandas. En junta #21 a 5 ft de la base se evidencia empalme de cable BES [inspección eléctrica/mecánica: sin novedad / corte]. SWU: [___] klb, SWD: [___] klb, Vel: [___] jts/h."
+   b) EN PRUEBAS DE INTEGRIDAD Y PRESIÓN (API 53 / BOP / HMBP / MANIFOLD):
+      - Si escriben: "Realizó prueba de integridad del HMBP aplicando 500 psi durante 15 minutos, ok. Dejó registrada en carta bartón."
+        Debes generar:
+        "Probó integridad de presión de HMBP de 7\" con [___ bbl] de agua industrial a [___ bpm], aplicando 500 psi durante 15 minutos, resultados satisfactorios (0 psi caída). Dejó registrada prueba en carta manométrica circular Barton [No. ___]."
+   c) EN TAPONES DE CEMENTO Y P&A:
+      - Generar estructura canónica:
+        "Bombeó tapón de cemento No. [___] desde [___ ft] hasta [___ ft] ([___ ft] de espesor) con [___ bbl] de lechada Clase G [15.8 ppg] a [___ bpm] con [___ psi]. Preflujo: [___ bbl]. Desplazamiento: [___ bbl]. WOC: [___ h]. TOC verificado con [___ klb]."
+   d) EN CIRCULACIONES Y CONTROL DE POZO:
+      - Generar estructura canónica:
+        "Circuló en [directa / reversa] con [___ bbl] de [agua industrial / salmuera / lodo de ___ ppg] a [___ bpm] con [___ psi], con retorno hacia catch tank, pérdidas/ganancias: [___ bbl]."
+8. FORMATO DE SALIDA (EXCLUSIVAMENTE JSON):
 Debes responder ÚNICAMENTE un bloque JSON válido con este esquema:
 {
   "corrected_spanish": "Líneas cronológicas saneadas directamente en español hora por hora (sin títulos decorativos)...",
@@ -185,6 +207,9 @@ def offline_polish_spanish(raw_text: str) -> Tuple[str, List[Dict[str, Any]], Li
         (r"instal[oó]\s+preventoras", "N/U conjunto de preventoras (BOP stack 7-1/16\" 5K)", "BOP stack", "🔵 ESTANDARIZACIÓN BOP"),
         (r"ech[oó]\s+reversa", "circuló en reversa hasta retorno limpio", "circulación en reversa", "🔵 ESTANDARIZACIÓN HIDRÁULICA"),
         (r"meti[oó]\s+barra", "lanzó barra para cizallar pin de drain sub", "barra drain sub", "🔵 ESTANDARIZACIÓN DRAIN SUB"),
+        (r"\bmls\s+joints\b", "MLE (Motor Lead Extension)", "MLE joints", "🔵 ESTANDARIZACIÓN BES: CABLE MLE"),
+        (r"\bovercoupling\b", "overcouplings con superbandas", "overcouplings", "🔵 ESTANDARIZACIÓN BES: OVERCOUPLING"),
+        (r"\bcarta\s+bart[oó]n\b", "carta manométrica circular Barton [No. ___]", "carta Barton", "🔵 INTEGRIDAD: CARTA BARTON"),
         (r"\bcontinuan\b", "continúan", "continúan", None),
         (r"\blineas\b", "líneas", "líneas", None),
         (r"\btuberia\b", "tubería", "tubería", None),
@@ -218,10 +243,47 @@ def offline_polish_spanish(raw_text: str) -> Tuple[str, List[Dict[str, Any]], Li
         })
         learning_tips.append("💡 Práctica de Hidráulica: Toda circulación de pozo debe indicar volumen (bbl), tasa de bombeo (bpm), presión (psi) y tipo de fluido de pozo.")
 
-    # 7. Tripping (POOH / RIH) Verification & Tally Mathematics
-    tripping_pattern = re.compile(r"\b(pooh|rih|pulling|sacar\s+tuber[ií]a|bajar\s+tuber[ií]a|sacando\s+primeras\s+juntas)\b", re.IGNORECASE)
+    # 7. Tripping (POOH / RIH) Verification, Tally & Golden Paragraph Expansion
+    tripping_pattern = re.compile(
+        r"\b(pooh|rih|pulling|sacar\s+tuber[ií]a|sacando\s+tuber[ií]a|se\s+retiran?\s+\d+\s+juntas?|retirando\s+\d+\s+juntas?|se\s+contin[uú]a\s+sacando|bajar\s+tuber[ií]a|bajando\s+tuber[ií]a|sacando\s+primeras\s+juntas|corrida\s+de\s+tuber[ií]a|m/u\s+bha|rih\s+bha|pooh\s+bha)\b",
+        re.IGNORECASE
+    )
     if tripping_pattern.search(text):
-        # A. Joint Tally & Calculated Progress (e.g. 4/150 jtas -> avance: 2.7%)
+        # 1. Expansion for tubular without thread/weight (on raw text): e.g. "TBG 2-7/8"" or "tubería 2-7/8""
+        tbg_spec_pattern = re.compile(r'\b(tbg|tuber[ií]a)\s*(2-3/8|2-7/8|3-1/2|4-1/2|5)(?:\"|\'\')?(?!\s*\[)(?!\s*lb/ft)', re.IGNORECASE)
+        if tbg_spec_pattern.search(text):
+            text = tbg_spec_pattern.sub(r'\1 \2" [especificar: rosca ej. EUE 8RD, peso: ___ lb/ft, grado: ___]', text)
+
+        # 2. Expansion for "RIH/POOH BHA No. X" without objective
+        bha_obj_pattern = re.compile(r"\b((?:rih|pooh)\s+bha\s+no\.?\s*\d+)\b(?!\s*\[)", re.IGNORECASE)
+        if bha_obj_pattern.search(text):
+            text = bha_obj_pattern.sub(r"\1 [especificar tipo de BHA y objetivo: ej. pesca / completamiento / limpieza]", text)
+
+        # 3. Expansion for single tally count "(26 Jts)" to fraction + advance %
+        single_tally_pattern = re.compile(r"\(\s*(\d+)\s*(?:jts?|juntas?|jtas?)\s*\)(?!\s*,\s*avance)", re.IGNORECASE)
+        if single_tally_pattern.search(text):
+            text = single_tally_pattern.sub(r"(\1/[TOTAL JTS] jtas), avance: [___]%", text)
+
+        # 4. Expansion for "Se retiran X juntas de tubería"
+        m_retira = re.search(r"se\s+retiran?\s+(\d+)\s+juntas\s+de\s+tuber[ií]a", text, re.IGNORECASE)
+        if m_retira:
+            jtas_ret = m_retira.group(1)
+            repl_retira = f"POOH [especificar tubular: ej. TBG 3-1/2\" 9.3 lb/ft N-80 EUE] quebrando en sencillos a rack desde [___ ft] hasta [___ ft], retirando {jtas_ret} juntas ({jtas_ret}/[TOTAL JTS] jtas), avance: [___]%, SWU: [___] klb, SWD: [___] klb, Vel: [___] jts/h, condición de sarta: [tubería llena/seca]"
+            text = text.replace(m_retira.group(0), repl_retira)
+
+        # 5. Expansion for "Se continúa sacando tubería hasta la junta #X"
+        m_cont = re.search(r"se\s+contin[uú]a\s+sacando\s+tuber[ií]a\s+hasta\s+la\s+junta\s*#?\s*(\d+)", text, re.IGNORECASE)
+        if m_cont:
+            j_target = m_cont.group(1)
+            repl_cont = f"Continuó POOH [especificar tubular: ej. TBG 3-1/2\" 9.3 lb/ft N-80 EUE] con tubería [llena / seca] quebrando en sencillos a rack desde [___ ft] hasta [___ ft] retirando juntas hasta acumulado ({j_target}/[TOTAL JTS] jtas, avance: [___]%), SWU: [___] klb, SWD: [___] klb, Vel: [___] jts/h"
+            text = text.replace(m_cont.group(0), repl_cont)
+
+        # 6. Expansion for RIH missing weights, speeds and displacement
+        if re.search(r"\bRIH\b", text, re.IGNORECASE) and not re.search(r"\b(?:swd|sow|peso\s+bajando)\b", text, re.IGNORECASE):
+            if "[TOTAL JTS]" in text and "SWD:" not in text:
+                text = text.replace("avance: [___]%", "avance: [___]%, SWD: [___] klb, Vel: [___] jts/h, condición de llenado: [tubería llena/seca, trip tank: ___ bbl]")
+
+        # 7. Joint Tally & Calculated Progress (e.g. 4/150 jtas -> avance: 2.7%)
         tally_pattern = re.compile(r"\(?\s*(\d+)\s*/\s*(\d+)\s*(?:jtas?|juntas?|jts?)\s*\)?", re.IGNORECASE)
         m_tally = tally_pattern.search(text)
         if m_tally:

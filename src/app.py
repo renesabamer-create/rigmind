@@ -448,10 +448,19 @@ async def index():
             font-weight: bold;
         }
         .diff-blank {
-            background: rgba(245, 158, 11, 0.25);
+            background: rgba(245, 158, 11, 0.22);
             color: #FBBF24;
-            padding: 2px 4px;
-            border-radius: 2px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            border: 1px dashed rgba(245, 158, 11, 0.6);
+            cursor: pointer;
+            transition: all 0.2s;
+            font-weight: 700;
+        }
+        .diff-blank:hover {
+            background: rgba(245, 158, 11, 0.45);
+            border-color: #FBBF24;
+            box-shadow: 0 0 8px rgba(245, 158, 11, 0.35);
         }
 
         .tips-list {
@@ -617,6 +626,7 @@ async def index():
             <div class="card-header">
                 <div class="card-title"><span>✏️</span> CAJA 2: Reporte Saneado & Auditoría (Español)</div>
                 <div style="display:flex; gap:6px;">
+                    <button class="btn btn-ghost" id="btnNextPlaceholder" onclick="focusNextPlaceholder()" style="color:var(--amber); border-color:rgba(245, 158, 11, 0.4);" title="Saltar y seleccionar el siguiente campo pendiente [___] (o presione Tab dentro del editor)">🎯 Llenar [___]</button>
                     <button class="btn btn-ghost" id="btnToggleDiff" onclick="toggleDiffMode()" title="Alternar entre modo editor interactivo y vista comparativa diff">🔍 Ver Diff</button>
                     <button class="btn btn-emerald" id="btnTranslateStage2" onclick="runStage2Translate()" style="font-weight:700;" title="Certificar con IADC y traducir a inglés usando la IA seleccionada">🚀 2. Traducir a Inglés IADC</button>
                 </div>
@@ -1000,6 +1010,79 @@ async def index():
                 isDiffMode = false;
             }
         }
+
+        /* NAVEGACIÓN Y RELLENADO INTELIGENTE DE CAMPOS [___] (CAJA 2) */
+        function focusNextPlaceholder() {
+            const editor = document.getElementById('polishedTextInput');
+            if (isDiffMode) {
+                toggleDiffMode(); // Cambia al editor interactivo
+            }
+            editor.focus();
+            const text = editor.value;
+            const regex = /\[[^\]\n]+\]/g;
+            let match;
+            const currentPos = editor.selectionEnd || 0;
+
+            // Busca el siguiente corchete después del cursor
+            regex.lastIndex = currentPos;
+            match = regex.exec(text);
+
+            // Si no hay más adelante, vuelve al inicio (wrap-around)
+            if (!match) {
+                regex.lastIndex = 0;
+                match = regex.exec(text);
+            }
+
+            if (match) {
+                editor.setSelectionRange(match.index, match.index + match[0].length);
+                const lineHeight = 20;
+                const linesBefore = text.substring(0, match.index).split('\n').length;
+                editor.scrollTop = Math.max(0, (linesBefore - 3) * lineHeight);
+            } else {
+                alert('✅ ¡Todos los campos obligatorios [___] han sido completados!');
+            }
+        }
+
+        // Listener de teclado: Al presionar TAB dentro del editor, salta de corchete en corchete
+        window.addEventListener('DOMContentLoaded', () => {
+            const editor = document.getElementById('polishedTextInput');
+            if (editor) {
+                editor.addEventListener('keydown', function(e) {
+                    if (e.key === 'Tab') {
+                        const text = this.value;
+                        const regex = /\[[^\]\n]+\]/g;
+                        regex.lastIndex = this.selectionEnd || 0;
+                        let match = regex.exec(text);
+                        if (!match) {
+                            regex.lastIndex = 0;
+                            match = regex.exec(text);
+                        }
+                        if (match) {
+                            e.preventDefault();
+                            this.setSelectionRange(match.index, match.index + match[0].length);
+                        }
+                    }
+                });
+            }
+
+            // Al hacer clic en un placeholder ámbar en la vista Diff, cambia al editor y lo selecciona
+            const diffBox = document.getElementById('diffViewBox');
+            if (diffBox) {
+                diffBox.addEventListener('click', function(e) {
+                    const blank = e.target.closest('.diff-blank');
+                    if (blank) {
+                        const targetText = blank.innerText.trim();
+                        if (isDiffMode) toggleDiffMode();
+                        const ed = document.getElementById('polishedTextInput');
+                        ed.focus();
+                        const idx = ed.value.indexOf(targetText);
+                        if (idx !== -1) {
+                            ed.setSelectionRange(idx, idx + targetText.length);
+                        }
+                    }
+                });
+            }
+        });
 
         /* FASE 2: CERTIFICACIÓN IADC Y TRADUCCIÓN A INGLÉS OFICIAL */
         async function runStage2Translate() {
