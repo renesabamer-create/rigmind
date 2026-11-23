@@ -686,6 +686,7 @@ async def index():
 
     <script>
         let latestAuditData = null;
+        let isDiffMode = false;
 
         function getClientApiKey() {
             return localStorage.getItem('rigmind_api_key') || '';
