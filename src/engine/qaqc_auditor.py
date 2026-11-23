@@ -40,23 +40,22 @@ DIRECTIVAS OPERACIONALES ESTRICTAS:
 5. SANIDAD FÍSICA Y MATEMÁTICA:
    - Corrige errores de unidades: si dice "peso 68000 klbs", es un error de digitación por libras (68 millones de libras es absurdo). Corrígelo a "peso neutro de sarta: 68 klb (68,000 lb)" y aclara sobretensión (ej. "tensionó hasta 70 klb, overpull: 2 klb").
    - Si hay bombeo o circulación sin caudal o fluido, inserta placeholders interactivos claros: "[especificar fluido: agua industrial / salmuera] a [___ bpm] con [___ psi] y retorno a catch tank".
-6. FORMATO DE SALIDA (EXCLUSIVAMENTE JSON):
+6. DIRECTIVA DE TRIPPING / MANIOBRA DE TUBERÍA (POOH / RIH) - AGENTE TALLY & MECÁNICA DE SARTA:
+   Toda operación de viaje de tubería (POOH / RIH / sacar tubería / bajar tubería / pulling / corrida) DEBE auditar y estructurar rigurosamente:
+   a) COTAS DE PROFUNDIDAD: Exige cota inicial y cota final (ej. "desde 5518 ft hasta 5456 ft"). Si faltan, inserta placeholders interactivos: "desde [___ ft] hasta [___ ft]".
+   b) TALLY DE JUNTAS Y AVANCE %: Exige el conteo de juntas (ej. "(4/150 jtas)") y calcula matemáticamente el avance porcentual ("avance: 2.7%"). Si el reporte incluye las juntas pero omitió el %, calcúlalo: (X/Y)*100%. Si el porcentaje reportado tiene error matemático, corrígelo y emite alerta crítica.
+   c) ESPECIFICACIONES COMPLETAS DE TUBULAR: Exige tipo (Tubing / Drill Pipe / Sucker Rods / Workstring), diámetro exterior (ej. 2-7/8", 3-1/2"), peso nominal (lb/ft, ej. 9.3 lb/ft), grado metalúrgico (L-80, N-80, J-55) y rosca/conexión (EUE 8RD, PH-6, etc.). Si faltan, inserta placeholders: "[TBG 3-1/2\" EU, ___ lb/ft, grado: ___]".
+   d) PESOS DE SARTA EN MOVIMIENTO (HOISTING): Exige peso subiendo (SWU / PUW) y peso bajando (SWD / SOW) en klb para auditar arrastre de pozo (drag = PUW - SWD).
+   e) MODO DE MANIOBRA: Exige detallar si se maniobra "quebrando en sencillos a rack" o "paradas en dobles a peine".
+   f) CONTROL DE POZO Y LLENADO (API RP 59): Exige indicar si se saca con "tubería llena" o "tubería seca", y el monitoreo de reposición de fluido en anular / tanque de viaje (trip tank) para reemplazar el volumen de desplazamiento del acero y prevenir pistoneo (swabbing / kick).
+7. FORMATO DE SALIDA (EXCLUSIVAMENTE JSON):
 Debes responder ÚNICAMENTE un bloque JSON válido con este esquema:
 {
   "corrected_spanish": "Líneas cronológicas saneadas directamente en español hora por hora (sin títulos decorativos)...",
   "agent_findings": [
     {
-      "agent": "nombre-del-agente-especialista (ej. chronology-time-reconciliation-auditor, tally-mechanics-engineer, well-integrity-bop-specialist, rig-move-logistics-specialist, well-control-pna-specialist, esp-artificial-lift-specialist, hse-npt-compliance-auditor, lead-intervention-director, oilfield-translator-editor)",
+      "agent": "nombre-del-agente-especialista (ej. tally-mechanics-engineer, chronology-time-reconciliation-auditor, well-integrity-bop-specialist, rig-move-logistics-specialist, well-control-pna-specialist, esp-artificial-lift-specialist, hse-npt-compliance-auditor, lead-intervention-director, oilfield-translator-editor)",
       "severity": "CRITICAL" | "WARNING" | "INFO" | "SUCCESS",
-      "badge": "EMOJI + TITULO DE ALERTA",
-      "message": "Explicación técnica detallada de lo detectado, corregido o norma aplicable."
-    }
-  ],
-  "learning_tips": [
-    "Consejo pedagógico 1",
-    "Consejo pedagógico 2"
-  ]
-}
       "badge": "EMOJI + TITULO DE ALERTA",
       "message": "Explicación técnica detallada de lo detectado, corregido o norma aplicable."
     }
@@ -218,6 +217,147 @@ def offline_polish_spanish(raw_text: str) -> Tuple[str, List[Dict[str, Any]], Li
             "message": f"Se reportó circulación de {bbls} bbl a {psi} psi, pero se omitió la tasa de bombeo (bpm) y el tipo de fluido. Se insertaron placeholders '[___ bpm]' en la Caja 2 para que complete el dato antes de traducir."
         })
         learning_tips.append("💡 Práctica de Hidráulica: Toda circulación de pozo debe indicar volumen (bbl), tasa de bombeo (bpm), presión (psi) y tipo de fluido de pozo.")
+
+    # 7. Tripping (POOH / RIH) Verification & Tally Mathematics
+    tripping_pattern = re.compile(r"\b(pooh|rih|pulling|sacar\s+tuber[ií]a|bajar\s+tuber[ií]a|sacando\s+primeras\s+juntas)\b", re.IGNORECASE)
+    if tripping_pattern.search(text):
+        # A. Joint Tally & Calculated Progress (e.g. 4/150 jtas -> avance: 2.7%)
+        tally_pattern = re.compile(r"\(?\s*(\d+)\s*/\s*(\d+)\s*(?:jtas?|juntas?|jts?)\s*\)?", re.IGNORECASE)
+        m_tally = tally_pattern.search(text)
+        if m_tally:
+            j_cur = int(m_tally.group(1))
+            j_tot = int(m_tally.group(2))
+            if j_tot > 0:
+                calc_pct = round((j_cur / j_tot) * 100, 1)
+                pct_pattern = re.compile(r"avance\s*[:=]?\s*(\d+(?:\.\d+)?)\s*%", re.IGNORECASE)
+                m_pct = pct_pattern.search(text)
+                if m_pct:
+                    stated_pct = float(m_pct.group(1))
+                    if abs(stated_pct - calc_pct) > 1.0:
+                        text = text.replace(m_pct.group(0), f"avance: {calc_pct}%")
+                        findings.append({
+                            "agent": "tally-mechanics-engineer",
+                            "severity": "CRITICAL",
+                            "badge": "🔴 ERROR MATEMÁTICO EN AVANCE DE JUNTAS",
+                            "message": f"Discrepancia en avance de tubería: ({j_cur}/{j_tot} jtas) equivale al {calc_pct}%, pero el reporte indicaba erróneamente {stated_pct}%. Corregido automáticamente a {calc_pct}%."
+                        })
+                    else:
+                        findings.append({
+                            "agent": "tally-mechanics-engineer",
+                            "severity": "SUCCESS",
+                            "badge": "🟢 TALLY & AVANCE DE JUNTAS VERIFICADO",
+                            "message": f"Conteo de juntas ({j_cur}/{j_tot} jtas) y avance del {calc_pct}% matemáticamente consistentes."
+                        })
+                else:
+                    orig_tally = m_tally.group(0)
+                    new_tally = f" ({j_cur}/{j_tot} jtas), avance: {calc_pct}% "
+                    text = text.replace(orig_tally, new_tally)
+                    text = re.sub(r"[ \t]+", " ", text)
+                    findings.append({
+                        "agent": "tally-mechanics-engineer",
+                        "severity": "INFO",
+                        "badge": "🔵 AVANCE DE JUNTAS CALCULADO",
+                        "message": f"Se calculó e insertó el porcentaje de avance matemático: ({j_cur}/{j_tot} jtas) = {calc_pct}%."
+                    })
+        else:
+            findings.append({
+                "agent": "tally-mechanics-engineer",
+                "severity": "WARNING",
+                "badge": "🟡 CONTEO DE JUNTAS PENDIENTE",
+                "message": "En maniobra de tubería (POOH/RIH) registre la fracción acumulada de juntas (ej. 4/150 jtas) y su avance porcentual."
+            })
+
+        # B. Initial and Final Depths
+        depth_pattern = re.compile(r"(?:desde\s+)?(\d{3,5})\s*ft(?:\s*-\s*EM)?\s*(?:hasta|a)\s*(\d{3,5})\s*ft", re.IGNORECASE)
+        m_depth = depth_pattern.search(text)
+        if m_depth:
+            d_init = int(m_depth.group(1))
+            d_fin = int(m_depth.group(2))
+            feet_tripped = abs(d_init - d_fin)
+            findings.append({
+                "agent": "tally-mechanics-engineer",
+                "severity": "SUCCESS",
+                "badge": "🟢 COTAS DE PROFUNDIDAD VERIFICADAS",
+                "message": f"Intervalo de maniobra verificado: {d_init} ft a {d_fin} ft ({feet_tripped} ft recorridos)."
+            })
+        else:
+            findings.append({
+                "agent": "tally-mechanics-engineer",
+                "severity": "WARNING",
+                "badge": "🟡 COTAS DE MANIOBRA FALTANTES",
+                "message": "En todo tramo de POOH/RIH registre profundidad inicial y final (ej. 'desde 5518 ft hasta 5456 ft')."
+            })
+
+        # C. Tubular specs (OD, weight, grade, thread)
+        has_od = bool(re.search(r'\b(?:2-3/8|2-7/8|3-1/2|4-1/2|5)\b', text))
+        has_wt = bool(re.search(r'\d+(?:\.\d+)?\s*(?:lb/ft|#)', text, re.IGNORECASE))
+        has_grade = bool(re.search(r'\b(l-?80|n-?80|j-?55|p-?110)\b', text, re.IGNORECASE))
+        has_thread = bool(re.search(r'\b(eue|nue|8rd|ph-?6|hydril)\b', text, re.IGNORECASE))
+        if has_od and has_wt and has_grade and has_thread:
+            findings.append({
+                "agent": "tally-mechanics-engineer",
+                "severity": "SUCCESS",
+                "badge": "🟢 ESPECIFICACIONES DE TUBULAR COMPLETAS",
+                "message": "Tubular completamente especificado: diámetro, peso nominal, grado metalúrgico y conexión."
+            })
+        else:
+            missing_specs = []
+            if not has_od: missing_specs.append("diámetro (ej. 3-1/2\")")
+            if not has_wt: missing_specs.append("peso nominal (ej. 9.3 lb/ft)")
+            if not has_grade: missing_specs.append("grado de acero (ej. N-80 o L-80)")
+            if not has_thread: missing_specs.append("conexión/rosca (ej. EUE 8RD)")
+            findings.append({
+                "agent": "tally-mechanics-engineer",
+                "severity": "WARNING",
+                "badge": "🟡 ESPECIFICACIÓN DE TUBULAR INCOMPLETA",
+                "message": f"Falta detallar en sarta: {', '.join(missing_specs)}."
+            })
+
+        # D. Weights: SWU (subiendo) & SWD (bajando)
+        has_swu = bool(re.search(r'\b(?:swu|puw|peso\s+subiendo)\b', text, re.IGNORECASE))
+        has_swd = bool(re.search(r'\b(?:swd|sow|peso\s+bajando)\b', text, re.IGNORECASE))
+        if has_swu and has_swd:
+            findings.append({
+                "agent": "tally-mechanics-engineer",
+                "severity": "SUCCESS",
+                "badge": "🟢 CONTROL DE PESOS Y ARRASTRE (SWU/SWD)",
+                "message": "Se registraron pesos subiendo (SWU) y bajando (SWD), permitiendo auditar el arrastre (drag = SWU - SWD) del pozo."
+            })
+        else:
+            findings.append({
+                "agent": "tally-mechanics-engineer",
+                "severity": "INFO",
+                "badge": "🔵 RECOMENDACIÓN DE PESOS: REGISTRAR SWU Y SWD",
+                "message": "Registre siempre peso subiendo (SWU/PUW) y bajando (SWD/SOW) para calcular arrastre (drag = PUW - SWD) y detectar empaquetamiento o fricción anómala."
+            })
+
+        # E. Singles vs Doubles
+        has_mode = bool(re.search(r'\b(sencillos|dobles|stands|paradas)\b', text, re.IGNORECASE))
+        if not has_mode:
+            findings.append({
+                "agent": "tally-mechanics-engineer",
+                "severity": "INFO",
+                "badge": "🔵 MODO DE MANIOBRA",
+                "message": "Especifique si la tubería se sacó/bajó en sencillos (a rack) o en dobles (paradas a peine)."
+            })
+
+        # F. Hole Fill / Metal Displacement (API RP 59)
+        has_fill = bool(re.search(r'\b(tuber[ií]a\s+llena|tuber[ií]a\s+seca|llenando\s+pozo|tanque\s+de\s+viaje|trip\s*tank|desplazamiento|reemplazando|pozo\s+lleno)\b', text, re.IGNORECASE))
+        if has_fill:
+            findings.append({
+                "agent": "well-control-pna-specialist",
+                "severity": "SUCCESS",
+                "badge": "🟢 CONTROL DE POZO Y LLENADO EN VIAJE (API RP 59)",
+                "message": "Se verificó condición de llenado de sarta y reposición de volumen de desplazamiento de acero."
+            })
+        else:
+            findings.append({
+                "agent": "well-control-pna-specialist",
+                "severity": "WARNING",
+                "badge": "🟡 CONTROL DE LLENADO DE POZO PENDIENTE (API RP 59)",
+                "message": "En maniobra de POOH, indique si se saca con 'tubería llena' o 'seca', y registre la reposición periódica de fluido en el anular (tanque de viaje / trip tank) para compensar el desplazamiento del metal y evitar pistoneo (swabbing)."
+            })
+            learning_tips.append("💡 Práctica de Control de Pozo (API RP 59): En POOH, el anular debe llenarse cada 5 stands monitoreando el trip tank. La falta de llenado reduce la presión hidrostática y puede inducir un influjo (kick).")
 
     return text, findings, learning_tips
 

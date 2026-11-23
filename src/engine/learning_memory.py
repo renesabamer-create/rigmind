@@ -268,7 +268,89 @@ def calculate_maturity_score(text: str) -> Dict[str, Any]:
             missing_for_next_level.append("Tiempo de fraguado (WOC) o verificación con peso del TOC")
 
     # -----------------------------------------------------------------
-    # DOMAIN 4: Tubulars, Tripping & Mechanics (Default Fallback)
+    # DOMAIN 4: Tubulars, Tripping & Mechanics (POOH / RIH / Tally)
+    # -----------------------------------------------------------------
+    elif domain == "TUBULARS_TRIPPING":
+        # 1. Cotas de profundidad inicial y final
+        has_depths = bool(re.search(r'desde\s+\d{2,5}\s*(?:ft|m).*?hasta\s+\d{2,5}\s*(?:ft|m)|\b\d{2,5}\s*(?:ft|m)\s*(?:a|-)\s*\d{2,5}\s*(?:ft|m)', t_lower))
+        if has_depths:
+            score += 15
+            checks.append("✅ Cotas de maniobra verificadas: Profundidad inicial y final (ft)")
+        else:
+            missing_for_next_level.append("Cotas de profundidad inicial y final (ej. desde 5518 ft hasta 5456 ft)")
+
+        # 2. Conteo de juntas (Tally) y Avance Porcentual Calculado
+        has_tally = bool(re.search(r'\(?\s*\d+\s*/\s*\d+\s*(?:jtas?|juntas?|jts?)\s*\)?', t_lower))
+        has_pct = bool(re.search(r'avance\s*[:=]?\s*\d+(?:\.\d+)?%', t_lower))
+        if has_tally and has_pct:
+            score += 15
+            checks.append("✅ Tally de juntas y avance porcentual calculado matemáticamente (ej. 4/150 jtas, avance: 2.7%)")
+        elif has_tally:
+            score += 10
+            missing_for_next_level.append("Avance porcentual calculado matemáticamente (ej. avance: 2.7%)")
+        else:
+            missing_for_next_level.append("Conteo de juntas fraccionario (ej. 4/150 jtas) y porcentaje de avance")
+
+        # 3. Especificación completa del tubular (Tipo, OD, lb/ft, Grado, Rosca)
+        has_pipe_type = bool(re.search(r'\b(tubing|drill\s*pipe|workstring|tuber[ií]a|dp|tbg)\b', t_lower))
+        has_od = bool(re.search(r'\b(?:2-3/8|2-7/8|3-1/2|4-1/2|5)\b|\d(?:-\d/\d)?"', text))
+        has_wt = bool(re.search(r'\d+(?:\.\d+)?\s*(?:lb/ft|#)', text, re.IGNORECASE))
+        has_grade = bool(re.search(r'\b(l-?80|n-?80|j-?55|p-?110|13cr)\b', t_lower))
+        has_thread = bool(re.search(r'\b(eue|nue|8rd|10rd|ph-?6|hydril|premium|box\s*x\s*pin)\b', t_lower))
+
+        specs_count = sum([has_pipe_type, has_od, has_wt, has_grade, has_thread])
+        if specs_count >= 4:
+            score += 20
+            checks.append("✅ Especificación técnica de tubular completa: Tipo, OD, peso nominal, grado de acero y conexión")
+        elif specs_count >= 2:
+            score += 10
+            missing_specs = []
+            if not has_pipe_type: missing_specs.append("tipo (Tubing/Drill Pipe)")
+            if not has_od: missing_specs.append("diámetro (ej. 3-1/2\")")
+            if not has_wt: missing_specs.append("peso (ej. 9.3 lb/ft)")
+            if not has_grade: missing_specs.append("grado (ej. L-80/N-80)")
+            if not has_thread: missing_specs.append("rosca (ej. EUE 8RD)")
+            missing_for_next_level.append(f"Completar tubular: {', '.join(missing_specs)}")
+        else:
+            missing_for_next_level.append("Especificación técnica de tubular (Tipo, OD, peso lb/ft, grado y rosca)")
+
+        # 4. Pesos en movimiento: Subiendo (SWU/PUW) y Bajando (SWD/SOW) + Arrastre (Drag)
+        has_swu = bool(re.search(r'\b(?:swu|puw|peso\s+subiendo)\b', t_lower))
+        has_swd = bool(re.search(r'\b(?:swd|sow|peso\s+bajando)\b', t_lower))
+        has_general_wt = bool(re.search(r'\b(?:klb|tension[oó]|peso\s+neutro|overpull)\b', t_lower))
+        if has_swu and has_swd:
+            score += 15
+            checks.append("✅ Control de pesos dinámicos: SWU (subiendo) y SWD (bajando) para auditoría de arrastre (drag)")
+        elif has_swu or has_swd or has_general_wt:
+            score += 10
+            missing_for_next_level.append("Registrar ambos pesos dinámicos: SWU (subiendo) y SWD (bajando) para monitorear arrastre")
+        else:
+            missing_for_next_level.append("Pesos de sarta en movimiento (SWU subiendo y SWD bajando en klb)")
+
+        # 5. Modo de maniobra (sencillos a rack vs dobles/stands a peine)
+        has_mode = bool(re.search(r'\b(sencillos|dobles|stands|paradas|quebrando|rack|peine)\b', t_lower))
+        if has_mode:
+            score += 10
+            checks.append("✅ Modo de maniobra especificado (sencillos a rack / dobles a peine)")
+        else:
+            missing_for_next_level.append("Modo de maniobra (quebrando en sencillos a rack o paradas en dobles a peine)")
+
+        # 6. Control de pozo y reposición de desplazamiento (API RP 59)
+        has_fill = bool(re.search(r'\b(tuber[ií]a\s+llena|tuber[ií]a\s+seca|llenando\s+pozo|tanque\s+de\s+viaje|trip\s*tank|desplazamiento|reemplazando|pozo\s+lleno)\b', t_lower))
+        if has_fill:
+            score += 15
+            checks.append("✅ Control de pozo en viaje (API RP 59): Condición de sarta (llena/seca) y reposición en trip tank")
+        else:
+            missing_for_next_level.append("Control de llenado de pozo (API RP 59): Tubería llena/seca y monitoreo de trip tank")
+
+        # 7. Velocidad operacional (ft/h o jtas/h)
+        has_speed = bool(re.search(r'\b(?:ft/h|ft/hr|jtas/h|jtas/hr|jts/h|vel\s*:)\b', t_lower))
+        if has_speed:
+            score += 10
+            checks.append("✅ Velocidad de viaje calculada y documentada (ft/h o jtas/h)")
+
+    # -----------------------------------------------------------------
+    # DOMAIN 5: Fallback General Operations
     # -----------------------------------------------------------------
     else:
         has_od = bool(re.search(r'\d(?:-\d/\d)?"|\d\.\d+"', text))
