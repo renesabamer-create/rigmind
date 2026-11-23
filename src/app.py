@@ -85,13 +85,17 @@ async def api_audit(req: AuditRequest):
     # 3. Maturity Score (0% to 100%)
     maturity_result = calculate_maturity_score(audit_result["corrected_spanish"])
     
-    # 4. Standardized IADC English Translation
+    # 4. Standardized IADC English Translation & Agent #10 QA/QC Audit
     effective_api_key = req.api_key or os.environ.get("GEMINI_API_KEY")
-    english_translation, engine_source = translate_to_iadc_english(
+    english_translation, engine_source, trans_qaqc = translate_to_iadc_english(
         audit_result["corrected_spanish"], 
         api_key=effective_api_key, 
         well_name=req.well_name
     )
+    
+    # Append Agent #10 Translation Findings into the Agent Findings List
+    if trans_qaqc and "findings" in trans_qaqc:
+        audit_result["agent_findings"].extend(trans_qaqc["findings"])
     
     return {
         "chronology": chrono_result,
@@ -101,7 +105,8 @@ async def api_audit(req: AuditRequest):
         "learning_tips": audit_result["learning_tips"],
         "maturity": maturity_result,
         "english_iadc": english_translation,
-        "engine_source": engine_source
+        "engine_source": engine_source,
+        "translation_qaqc": trans_qaqc
     }
 
 @app.post("/api/memory/save")
@@ -522,16 +527,17 @@ async def index():
             </div>
         </div>
 
-        <!-- CAJA 3: RECOMENDACIONES QA/QC DE LOS 9 AGENTES -->
+        <!-- CAJA 3: RECOMENDACIONES QA/QC DE LOS 10 AGENTES -->
         <div class="card">
             <div class="card-header">
-                <div class="card-title"><span>🛡️</span> CAJA 3: Auditoría QA/QC de los 9 Agentes</div>
+                <div class="card-title"><span>🛡️</span> CAJA 3: Auditoría QA/QC de los 10 Agentes</div>
                 <span class="badge badge-cyan" id="findingsCountBadge">0 Alertas</span>
             </div>
             <div class="card-body">
                 <div class="findings-list" id="findingsListContainer">
                     <div style="font-size:0.8rem; color:var(--text-muted); padding:10px;">
-                        Aquí aparecerán las observaciones de los agentes:
+                        Aquí aparecerán las observaciones de los 10 agentes especializados:
+                        <br>• <b>Auditoría de Traducción IADC (Agent #10)</b>: Cero Spanglish, nomenclatura SPE, siglas operacionales.
                         <br>• Integridad & BOP (API 53, pruebas en baja 250-350 psi, alta vs MASP, tiempos).
                         <br>• Movilización & Logística (R/D, R/M, R/U, cargas conciliadas, tarifas).
                         <br>• Tally & Sartas (holguras, velocidades, overpull).
@@ -555,8 +561,11 @@ async def index():
             </div>
             <div class="card-body">
                 <div id="englishOutputBox" class="english-box">Aquí se generará el texto oficial en inglés técnico petrolero estandarizado...</div>
-                <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.75rem; color:var(--text-muted); margin-top:6px;">
-                    <span>⚡ Motor: <b id="translationEngineBadge" style="color:var(--amber)">Motor Especializado Offline IADC</b></span>
+                <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.75rem; color:var(--text-muted); margin-top:6px; flex-wrap:wrap; gap:8px;">
+                    <div>
+                        <span>⚡ Motor: <b id="translationEngineBadge" style="color:var(--amber)">Motor Especializado Offline IADC</b></span>
+                        <span id="translationAuditBadge" class="badge badge-emerald" style="display:none; margin-left:8px;">🛡️ IADC Certified</span>
+                    </div>
                     <span id="copyConfirmNotice" style="color:var(--emerald)"></span>
                 </div>
             </div>
@@ -773,6 +782,17 @@ async def index():
                     const engineBadge = document.getElementById('translationEngineBadge');
                     engineBadge.innerText = data.engine_source;
                     engineBadge.style.color = data.engine_source.includes('Gemini') ? 'var(--emerald)' : 'var(--amber)';
+                }
+                if (data.translation_qaqc) {
+                    const auditBadge = document.getElementById('translationAuditBadge');
+                    auditBadge.style.display = 'inline-block';
+                    if (data.translation_qaqc.has_spanglish) {
+                        auditBadge.className = 'badge badge-amber';
+                        auditBadge.innerText = '⚠️ Spanglish Detectado (' + data.translation_qaqc.quality_score + '%)';
+                    } else {
+                        auditBadge.className = 'badge badge-emerald';
+                        auditBadge.innerText = '🛡️ IADC Certified (100%)';
+                    }
                 }
 
             } catch (err) {
