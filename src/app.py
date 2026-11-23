@@ -724,11 +724,19 @@ async def index():
         let isDiffMode = false;
 
         function getClientApiKey() {
-            return localStorage.getItem('rigmind_api_key') || '';
+            try {
+                return localStorage.getItem('rigmind_api_key') || '';
+            } catch (e) {
+                return '';
+            }
         }
 
         function getClientProvider() {
-            return localStorage.getItem('rigmind_provider') || 'auto';
+            try {
+                return localStorage.getItem('rigmind_provider') || 'auto';
+            } catch (e) {
+                return 'auto';
+            }
         }
 
         function detectProviderFromKey(key) {
@@ -895,6 +903,16 @@ async def index():
             const btnTranslate = document.getElementById('btnTranslateStage2');
 
             if (!rawText) {
+                const rawInput = document.getElementById('rawTextInput');
+                if (rawInput) {
+                    rawInput.focus();
+                    rawInput.style.borderColor = '#EF4444';
+                    setTimeout(() => { rawInput.style.borderColor = 'var(--border)'; }, 3000);
+                }
+                const notice = document.getElementById('gapNoticeText');
+                if (notice) {
+                    notice.innerHTML = '<span style="color:var(--crimson); font-weight:700;">⚠️ Ingrese o pegue el reporte en la Caja 1 primero.</span>';
+                }
                 alert('Por favor ingrese o pegue texto en la Caja 1.');
                 return;
             }
@@ -902,6 +920,10 @@ async def index():
             if (btnAudit) {
                 btnAudit.disabled = true;
                 btnAudit.innerText = '⏳ Auditando...';
+            }
+            const notice = document.getElementById('gapNoticeText');
+            if (notice) {
+                notice.innerHTML = '<span style="color:var(--cyan); font-weight:600;">⏳ Auditando con 11 agentes especializados...</span>';
             }
 
             const clientKey = getClientApiKey();
@@ -1031,6 +1053,11 @@ async def index():
                 }
 
             } catch (err) {
+                console.error("Audit error:", err);
+                const notice = document.getElementById('gapNoticeText');
+                if (notice) {
+                    notice.innerHTML = `<span style="color:var(--crimson); font-weight:700;">❌ Error al conectar: ${err.message}</span>`;
+                }
                 alert('Error al auditar el reporte: ' + err.message);
             } finally {
                 if (btnAudit) {
@@ -1132,7 +1159,17 @@ async def index():
                     }
                 });
             }
+
+            // Asegurar enlace directo al botón de auditoría
+            const btn = document.getElementById('btnAuditStage1');
+            if (btn) btn.onclick = runStage1Audit;
         });
+
+        // Asegurar que esté disponible inmediatamente en window
+        window.runStage1Audit = runStage1Audit;
+        window.runStage2Translate = runStage2Translate;
+        window.toggleDiffMode = toggleDiffMode;
+        window.focusNextPlaceholder = focusNextPlaceholder;
 
         /* FASE 2: CERTIFICACIÓN IADC Y TRADUCCIÓN A INGLÉS OFICIAL */
         async function runStage2Translate() {
