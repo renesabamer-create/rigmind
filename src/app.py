@@ -311,6 +311,8 @@ async def index():
             display: flex;
             flex-direction: column;
             overflow: hidden;
+            height: 100%;
+            min-height: 480px;
         }
         .card-header {
             background: #0E131A;
@@ -334,22 +336,28 @@ async def index():
             display: flex;
             flex-direction: column;
             gap: 10px;
+            min-height: 0;
         }
 
         textarea.editor-box {
             width: 100%;
-            min-height: 280px;
-            max-height: 520px;
+            flex: 1;
+            min-height: 380px;
             background: #0E131A;
             border: 1px solid var(--border);
             color: #E2E8F0;
             font-family: var(--font-mono);
-            font-size: 0.82rem;
-            padding: 10px;
+            font-size: 0.83rem;
+            padding: 12px;
             resize: vertical;
-            line-height: 1.4;
+            line-height: 1.5;
+            box-sizing: border-box;
         }
-        textarea.editor-box:focus { outline: none; border-color: var(--amber); }
+        textarea.editor-box:focus {
+            outline: none;
+            border-color: var(--cyan);
+            box-shadow: 0 0 8px rgba(0, 210, 180, 0.2);
+        }
 
         .btn {
             background: var(--amber);
@@ -381,12 +389,13 @@ async def index():
             border: 1px solid var(--border);
             padding: 12px;
             font-family: var(--font-mono);
-            font-size: 0.82rem;
-            min-height: 280px;
-            max-height: 520px;
+            font-size: 0.83rem;
+            min-height: 380px;
+            flex: 1;
             overflow-y: auto;
             white-space: pre-wrap;
             line-height: 1.6;
+            box-sizing: border-box;
         }
         .diff-del {
             background: rgba(239, 68, 68, 0.25);
@@ -427,7 +436,8 @@ async def index():
             display: flex;
             flex-direction: column;
             gap: 8px;
-            max-height: 520px;
+            min-height: 380px;
+            flex: 1;
             overflow-y: auto;
         }
         .finding-card {
@@ -442,13 +452,14 @@ async def index():
             border: 1px solid var(--border);
             color: #93C5FD;
             font-family: var(--font-mono);
-            font-size: 0.82rem;
+            font-size: 0.83rem;
             padding: 12px;
-            min-height: 280px;
-            max-height: 520px;
+            min-height: 380px;
+            flex: 1;
             overflow-y: auto;
             white-space: pre-wrap;
             line-height: 1.5;
+            box-sizing: border-box;
         }
 
         .status-strip {
@@ -457,7 +468,8 @@ async def index():
             align-items: center;
             font-family: var(--font-mono);
             font-size: 0.75rem;
-            margin-top: 4px;
+            margin-top: auto;
+            padding-top: 4px;
         }
     </style>
 </head>
