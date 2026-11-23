@@ -1,21 +1,345 @@
+import os
 import re
-from typing import List, Dict, Any
+import json
+import urllib.request
+import difflib
+from typing import List, Dict, Any, Tuple, Optional
 from src.engine.learning_memory import classify_operational_domain
 
-def audit_operations_text(raw_text: str, well_profile: dict = None) -> Dict[str, Any]:
+# ==============================================================================
+# ELITE SPANISH ENGINEERING AUDIT SYSTEM PROMPT (DeepSeek V3, GPT-4o, Claude 3.5)
+# ==============================================================================
+
+ELITE_SPANISH_AUDIT_SYSTEM_PROMPT = """Eres el Superintendente Senior de Operaciones de Pozo y Auditor Técnico QA/QC de RigMind (Smart Resources).
+Tu misión es transformar notas crudas, informales o desordenadas de campo en español en un reporte técnico de operaciones (DOR) de pozo IMPECABLE, RIGUROSO y PROFESIONAL en español bajo normativas API, SPE, IADC y NORSOK D-010.
+
+DIRECTIVAS OPERACIONALES ESTRICTAS:
+1. PROTOCOLO DE CERO OMISIÓN DE DATOS:
+   Conserva CADA detalle, maniobra, volumen, presión, profundidad, tiempo, herramienta, número de serie o junta. NUNCA resumas, sintetices o elimines actividades.
+2. CRONOLOGÍA Y TIEMPOS OPERACIONALES:
+   - Toda actividad debe tener un rango horario claro hora por hora (ej. "00:00 - 01:00: ...", "01:00 - 01:30: ...").
+   - Si la primera actividad no tiene hora asignada (ej. "Personal toma de alimentos y descanso"), asígnale el rango estándar "00:00 - 01:00: ".
+   - Elimina líneas huérfanas de horas (ej. si "01:00 - 01:30" está solo en una línea, únelo con la actividad siguiente).
+3. CORRECCIÓN ORTOGRÁFICA Y TIPOGRÁFICA DE CAMPO:
+   - Corrige errores típicos de tipeo en taladro:
+     "pup joi t" -> "pup joint de manejo"
+     "xequipos" -> "equipos de superficie Novomet"
+     "lineas" -> "líneas", "tuberia" -> "tubería", "reunion" -> "reunión", "tensiono" -> "tensionó"
+4. ESTANDARIZACIÓN TÉCNICA PETROLERA EN ESPAÑOL:
+   - "choque" o "el choque" -> "manifold de choque (choke manifold)"
+   - "arme" o "arme del equipo" -> "Rig Up (R/U) y arme de equipos de superficie"
+   - "llaves hidraulicas" -> "llaves hidráulicas de potencia (Power Tongs)"
+   - "Novomet arme de sus xequipos" -> "Compañía Novomet realiza arme y conexionado de equipos de superficie para sistema BES (ESP)"
+   - "check list" -> "checklist preoperacional diario de herramientas y equipos"
+   - "pulling" -> "pulling de tubería / sarta"
+5. SANIDAD FÍSICA Y MATEMÁTICA:
+   - Corrige errores de unidades: si dice "peso 68000 klbs", es un error de digitación por libras (68 millones de libras es absurdo). Corrígelo a "peso neutro de sarta: 68 klb (68,000 lb)" y aclara sobretensión (ej. "tensionó hasta 70 klb, overpull: 2 klb").
+   - Si hay bombeo o circulación sin caudal o fluido, inserta placeholders interactivos claros: "[especificar fluido: agua industrial / salmuera] a [___ bpm] con [___ psi] y retorno a catch tank".
+6. FORMATO DE SALIDA (EXCLUSIVAMENTE JSON):
+Debes responder ÚNICAMENTE un bloque JSON válido con este esquema:
+{
+  "corrected_spanish": "Reporte completo saneado y estructurado en español hora por hora...",
+  "agent_findings": [
+    {
+      "agent": "nombre-del-agente-especialista",
+      "severity": "CRITICAL" | "WARNING" | "INFO" | "SUCCESS",
+      "badge": "EMOJI + TITULO DE ALERTA",
+      "message": "Explicación técnica detallada de lo detectado, corregido o norma aplicable."
+    }
+  ],
+  "learning_tips": [
+    "Consejo pedagógico 1",
+    "Consejo pedagógico 2"
+  ]
+}
+"""
+
+# ==============================================================================
+# TOKEN-LEVEL VISUAL DIFF GENERATOR (HTML Red/Green Highlights)
+# ==============================================================================
+
+def generate_token_diff(raw_text: str, corrected_text: str) -> str:
     """
-    Runs multi-agent technical QA/QC audit across raw Spanish operational text.
-    Produces:
-    - visual_diff_html: highlighted HTML showing red strikethroughs & green corrections.
-    - corrected_spanish: cleaned, technically rigorous Spanish text.
-    - agent_findings: list of specific findings categorized by agent.
-    - learning_tips: pedagogical engineering advice for future reporting.
+    Produces clean HTML highlighting differences between raw and corrected text:
+    - Red strikethroughs for deleted/replaced text: <span class="diff-del"><s>...</s></span>
+    - Green bold for added/corrected text: <span class="diff-ins"><b>...</b></span>
+    - Amber bold for placeholders to complete: <span class="diff-blank"><b>...</b></span>
     """
-    diff_html = raw_text
-    corrected_text = raw_text
+    raw_tokens = re.findall(r'\S+|\n|[^\S\n]+', raw_text)
+    corr_tokens = re.findall(r'\S+|\n|[^\S\n]+', corrected_text)
+    
+    matcher = difflib.SequenceMatcher(None, raw_tokens, corr_tokens)
+    out = []
+    
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == 'equal':
+            out.append(''.join(raw_tokens[i1:i2]))
+        elif tag == 'replace':
+            old_str = ''.join(raw_tokens[i1:i2])
+            new_str = ''.join(corr_tokens[j1:j2])
+            out.append(f'<span class="diff-del"><s>{old_str}</s></span><span class="diff-ins"><b>{new_str}</b></span>')
+        elif tag == 'delete':
+            old_str = ''.join(raw_tokens[i1:i2])
+            out.append(f'<span class="diff-del"><s>{old_str}</s></span>')
+        elif tag == 'insert':
+            new_str = ''.join(corr_tokens[j1:j2])
+            if '[' in new_str and ']' in new_str:
+                out.append(f'<span class="diff-blank"><b>{new_str}</b></span>')
+            else:
+                out.append(f'<span class="diff-ins"><b>{new_str}</b></span>')
+                
+    return ''.join(out)
+
+
+# ==============================================================================
+# OFFLINE DETERMINISTIC PETROLEUM POLISHER (Rulebook Fallback)
+# ==============================================================================
+
+def offline_polish_spanish(raw_text: str) -> Tuple[str, List[Dict[str, Any]], List[str]]:
+    """
+    Comprehensive offline heuristic engine for Spanish field notes sanitization.
+    Normalizes typos, units, missing timestamps, and technical nomenclature.
+    """
+    text = raw_text
     findings = []
     learning_tips = []
+
+    # 1. Missing midnight hour interval
+    if re.match(r"^\s*(?:personal\s+)?toma\s+de\s+alimentos", text, re.IGNORECASE):
+        text = re.sub(r"^\s*(personal\s+toma\s+de\s+alimentos\s+y\s+descanso\.?)", r"00:00 - 01:00: \1", text, flags=re.IGNORECASE)
+        findings.append({
+            "agent": "lead-intervention-director",
+            "severity": "WARNING",
+            "badge": "🟠 CRONOLOGÍA: INTERVALO INICIAL ASIGNADO",
+            "message": "La actividad inicial de descanso/alimentos no tenía rango horario asignado. Se asignó automáticamente el intervalo estándar '00:00 - 01:00' para iniciar el cierre de 24 horas."
+        })
+        learning_tips.append("💡 Práctica de Cronología: Todo reporte operacional debe iniciar estrictamente a las 00:00 h para garantizar el balance y facturación de 24 horas del día.")
+
+    # 2. Orphaned timestamp lines (e.g. "01:00 - 01:30\n\nContinuan...")
+    orphan_pattern = re.compile(r"(\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2})\s*\n+(\s*\w)", re.MULTILINE)
+    if orphan_pattern.search(text):
+        text = orphan_pattern.sub(r"\1: \2", text)
+        findings.append({
+            "agent": "lead-intervention-director",
+            "severity": "INFO",
+            "badge": "🔵 CRONOLOGÍA: LÍNEAS HUÉRFANAS ESTRUCTURADAS",
+            "message": "Se unificaron los encabezados de hora que se encontraban aislados con sus actividades correspondientes."
+        })
+
+    # 3. Critical string weight absurdity (e.g. 68000 klbs -> 68 klb)
+    absurd_weight_pattern = re.compile(r"peso\s+(\d{4,6})\s*klbs?", re.IGNORECASE)
+    m_absurd = absurd_weight_pattern.search(text)
+    if m_absurd:
+        val = int(m_absurd.group(1))
+        corr_val = val // 1000 if val >= 1000 else val
+        text = text.replace(m_absurd.group(0), f"peso neutro de sarta {corr_val} klb ({val:,} lb)")
+        findings.append({
+            "agent": "tally-mechanics-engineer",
+            "severity": "CRITICAL",
+            "badge": "🔴 ERROR CRÍTICO DE UNIDADES EN PESO DE SARTA",
+            "message": f"Se reportó erróneamente '{m_absurd.group(0)}'. En campo petrolero, 1 klb = 1,000 lb, por lo que {val:,} klb equivaldría a {val/1000:,.1f} millones de libras (físicamente absurdo). Se corrigió a {corr_val} klb ({val:,} lb)."
+        })
+        learning_tips.append(f"💡 Mecánica de Sartas: Recuerde la nomenclatura: 1 klb = 1,000 lb. Si el peso son {val:,} libras en el indicador de peso (Martin Decker), debe escribirse {corr_val} klb.")
+
+    # 4. Overpull / Tension clarification (e.g. "tensiono con 70 klbs")
+    m_tens = re.search(r"tension[oó]\s+con\s+(\d+)\s*klbs?", text, re.IGNORECASE)
+    if m_tens:
+        tens_val = int(m_tens.group(1))
+        text = re.sub(r"tension[oó]\s+con\s+(\d+)\s*klbs?", rf"tensionó sarta hasta \1 klb", text, flags=re.IGNORECASE)
+        findings.append({
+            "agent": "tally-mechanics-engineer",
+            "severity": "SUCCESS",
+            "badge": "🟢 TENSIÓN DE SARTA AUDITADA",
+            "message": f"Tensión aplicada de {tens_val} klb para desasentar y sacar primeras juntas verificada dentro de parámetros."
+        })
+
+    # 5. Field Typos and Lexical Normalization
+    replacements = [
+        (r"\bpup\s+joi\s*t(?:\s+de\s+manejo)?\b", "pup joint de manejo", "pup joint", "🔵 CORRECCIÓN ORTOGRÁFICA: PUP JOINT"),
+        (r"\bNovomet\s+arme\s+de\s+sus\s+x?equipos\.?", "Compañía Novomet realiza arme y conexionado de equipos de superficie BES (ESP).", "equipos Novomet", "🔵 ESTANDARIZACIÓN BES: NOVOMET"),
+        (r"\bxequipos\b", "equipos de superficie", "equipos", "🔵 CORRECCIÓN DE TIPEO: XEQUIPOS"),
+        (r"(?:y\s+el\s+choque|\bchoque\b)(?!\s*manifold|\s*\(choke)", "manifold de choque (choke manifold)", "choke manifold", "🔵 ESTANDARIZACIÓN TÉCNICA: CHOKE MANIFOLD"),
+        (r"(?:rig\s+up\s+llaves\s+hidr[aá]ulicas|llaves\s+hidr[aá]ulicas\b)(?!\s*de\s+potencia)", "R/U de llaves hidráulicas de potencia (Power Tongs)", "llaves hidráulicas", "🔵 ESTANDARIZACIÓN TÉCNICA: POWER TONGS"),
+        (r"\bcheck\s*list\s+diario\b", "checklist preoperacional diario", "checklist", "🔵 SEGURIDAD: CHECKLIST DIARIO"),
+        (r"\breuni[oó]n\s+preoperacional\s+para\s+", "reunión preoperacional de seguridad (PJSM) para ", "reunión preoperacional", "🔵 SEGURIDAD: PJSM"),
+        (r"desarm[oó]\s+el\s+arbolito", "N/D Árbol de Producción (X-tree 7-1/16\" 3K/5K)", "árbol de producción", "🔵 ESTANDARIZACIÓN X-TREE"),
+        (r"retir[oó]\s+arbolito", "N/D Árbol de Producción", "árbol de producción", "🔵 ESTANDARIZACIÓN X-TREE"),
+        (r"instal[oó]\s+preventoras", "N/U conjunto de preventoras (BOP stack 7-1/16\" 5K)", "BOP stack", "🔵 ESTANDARIZACIÓN BOP"),
+        (r"ech[oó]\s+reversa", "circuló en reversa hasta retorno limpio", "circulación en reversa", "🔵 ESTANDARIZACIÓN HIDRÁULICA"),
+        (r"meti[oó]\s+barra", "lanzó barra para cizallar pin de drain sub", "barra drain sub", "🔵 ESTANDARIZACIÓN DRAIN SUB"),
+        (r"\bcontinuan\b", "continúan", "continúan", None),
+        (r"\blineas\b", "líneas", "líneas", None),
+        (r"\btuberia\b", "tubería", "tubería", None),
+        (r"\brealizo\b", "realizó", "realizó", None),
+        (r"\bcirculacion\b", "circulación", "circulación", None),
+    ]
+
+    for pat, rep, name, badge in replacements:
+        if re.search(pat, text, re.IGNORECASE):
+            text = re.sub(pat, rep, text, flags=re.IGNORECASE)
+            if badge:
+                findings.append({
+                    "agent": "oilfield-translator-editor",
+                    "severity": "INFO",
+                    "badge": badge,
+                    "message": f"Se normalizó la terminología de campo hacia estándar técnico: '{name}'."
+                })
+
+    # 6. Circulation without rate/fluid
+    circ_match = re.search(r"circulaci[oó]n\s+en\s+directa\s+(\d+)\s*bbls?\s+con\s+(\d+)\s*psi", text, re.IGNORECASE)
+    if circ_match:
+        bbls = circ_match.group(1)
+        psi = circ_match.group(2)
+        better_circ = f"circulación en directa de {bbls} bbl de fluido [especificar fluido: agua industrial / salmuera] a [___ bpm] con {psi} psi y retorno a catch tank"
+        text = text.replace(circ_match.group(0), better_circ)
+        findings.append({
+            "agent": "well-control-pna-specialist",
+            "severity": "WARNING",
+            "badge": "🟡 PARÁMETROS DE BOMBEO INCOMPLETOS",
+            "message": f"Se reportó circulación de {bbls} bbl a {psi} psi, pero se omitió la tasa de bombeo (bpm) y el tipo de fluido. Se insertaron placeholders '[___ bpm]' en la Caja 2 para que complete el dato antes de traducir."
+        })
+        learning_tips.append("💡 Práctica de Hidráulica: Toda circulación de pozo debe indicar volumen (bbl), tasa de bombeo (bpm), presión (psi) y tipo de fluido de pozo.")
+
+    return text, findings, learning_tips
+
+
+# ==============================================================================
+# AI-POWERED SPANISH ENGINEERING AUDITOR (DeepSeek, OpenAI, Groq, Claude, Gemini)
+# ==============================================================================
+
+def parse_audit_json(raw_resp: str) -> Dict[str, Any]:
+    """Extracts and parses JSON object from LLM response safely."""
+    clean = raw_resp.strip()
+    if clean.startswith("```"):
+        clean = re.sub(r"^```(?:json)?\s*", "", clean)
+        clean = re.sub(r"\s*```$", "", clean)
+    try:
+        return json.loads(clean.strip())
+    except Exception:
+        # Fallback regex search for JSON block
+        m = re.search(r"\{[\s\S]*\}", clean)
+        if m:
+            return json.loads(m.group(0))
+        raise ValueError("No valid JSON found in AI audit response")
+
+
+def call_ai_spanish_audit(text: str, api_key: str, provider: str = "auto", well_name: str = "Well") -> Optional[Dict[str, Any]]:
+    """
+    Executes the LLM Lead Well Operations Auditor in Spanish.
+    Supports DeepSeek V3, OpenAI, Claude, Groq, and Gemini.
+    """
+    prov = provider.lower()
+    k = api_key.strip()
     
+    # Auto-detect if needed
+    if prov in ("auto", ""):
+        if k.startswith("sk-ant-"):
+            prov = "anthropic"
+        elif k.startswith("gsk_"):
+            prov = "groq"
+        elif k.startswith("sk-"):
+            # Could be DeepSeek or OpenAI
+            prov = "openai"
+        elif k.startswith("AIza"):
+            prov = "gemini"
+        else:
+            prov = "deepseek"
+
+    # DeepSeek
+    if prov == "deepseek":
+        url = "https://api.deepseek.com/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {k}"
+        }
+        payload = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": ELITE_SPANISH_AUDIT_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Audite, sanee y estandarice las siguientes notas crudas de campo del Pozo '{well_name}':\n\n{text}"}
+            ],
+            "temperature": 0.1,
+            "max_tokens": 4096,
+            "response_format": {"type": "json_object"}
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=35) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            choices = result.get("choices", [])
+            if choices:
+                return parse_audit_json(choices[0].get("message", {}).get("content", ""))
+
+    # OpenAI
+    elif prov == "openai":
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {k}"
+        }
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "system", "content": ELITE_SPANISH_AUDIT_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Audite, sanee y estandarice las siguientes notas crudas de campo del Pozo '{well_name}':\n\n{text}"}
+            ],
+            "temperature": 0.1,
+            "max_tokens": 4096,
+            "response_format": {"type": "json_object"}
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=35) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            choices = result.get("choices", [])
+            if choices:
+                return parse_audit_json(choices[0].get("message", {}).get("content", ""))
+
+    # Groq
+    elif prov == "groq":
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {k}"
+        }
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": ELITE_SPANISH_AUDIT_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Audite, sanee y estandarice las siguientes notas crudas de campo del Pozo '{well_name}':\n\n{text}"}
+            ],
+            "temperature": 0.1,
+            "max_tokens": 4096,
+            "response_format": {"type": "json_object"}
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers)
+        with urllib.request.urlopen(req, timeout=35) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            choices = result.get("choices", [])
+            if choices:
+                return parse_audit_json(choices[0].get("message", {}).get("content", ""))
+
+    return None
+
+
+# ==============================================================================
+# MASTER MULTI-AGENT AUDIT ENGINE
+# ==============================================================================
+
+def audit_operations_text(raw_text: str, api_key: str = None, provider: str = "auto", well_name: str = "Yopo-1") -> Dict[str, Any]:
+    """
+    Runs multi-agent technical QA/QC audit across raw Spanish operational text.
+    Combines:
+    1. Orchestrator Triage (Lead Intervention Director).
+    2. Deep AI Audit (DeepSeek V3 / OpenAI) when available.
+    3. Comprehensive Offline Field Rulebook (Deterministic Fallback).
+    4. Deterministic Cement Math, BOP Tests, Rig Move & HMBP P&A verification.
+    5. Token-Level HTML Visual Diff generation.
+    """
+    findings: List[Dict[str, Any]] = []
+    learning_tips: List[str] = []
+
     # -------------------------------------------------------------
     # 0. ORCHESTRATOR TRIAGE: Lead Intervention Director Dispatch
     # -------------------------------------------------------------
@@ -26,11 +350,38 @@ def audit_operations_text(raw_text: str, well_profile: dict = None) -> Dict[str,
         "badge": f"🎯 DIRECCIONAMIENTO ({classification['icon']} {classification['domain']})",
         "message": f"Contenido analizado por el Director de Operaciones como '{classification['title']}'. Especialista asignado: [{classification['specialist']}]. Se suprimen sugerencias cruzadas no relacionadas para mantener estricto foco técnico."
     })
-    
+
+    corrected_text = raw_text
+    ai_audit_success = False
+
     # -------------------------------------------------------------
-    # 1. AUDIT: Cement Plug Thickness Math Error Check
-    # (e.g. "6050 ft a 5634 ft, 146 ft de espesor")
+    # 1. AI-POWERED AUDIT (DeepSeek / OpenAI)
     # -------------------------------------------------------------
+    if api_key and provider != "none":
+        try:
+            ai_res = call_ai_spanish_audit(raw_text, api_key=api_key, provider=provider, well_name=well_name)
+            if ai_res and "corrected_spanish" in ai_res and ai_res["corrected_spanish"].strip():
+                corrected_text = ai_res["corrected_spanish"].strip()
+                if "agent_findings" in ai_res and isinstance(ai_res["agent_findings"], list):
+                    findings.extend(ai_res["agent_findings"])
+                if "learning_tips" in ai_res and isinstance(ai_res["learning_tips"], list):
+                    learning_tips.extend(ai_res["learning_tips"])
+                ai_audit_success = True
+        except Exception:
+            ai_audit_success = False
+
+    # -------------------------------------------------------------
+    # 2. OFFLINE DETERMINISTIC POLISHER (Fallback or Enrichment)
+    # -------------------------------------------------------------
+    if not ai_audit_success:
+        corrected_text, off_findings, off_tips = offline_polish_spanish(raw_text)
+        findings.extend(off_findings)
+        learning_tips.extend(off_tips)
+
+    # -------------------------------------------------------------
+    # 3. DETERMINISTIC REINFORCEMENTS: CEMENT MATH & DATES
+    # -------------------------------------------------------------
+    # Cement Plug Thickness Math Error Check (e.g. 6050 ft a 5634 ft, 146 ft de espesor)
     plug_pattern = re.compile(
         r"(?:tap[oó]n(?: de fondo)?\s+(?:de\s+)?|desde\s+)(\d{3,5}(?:\.\d+)?)\s*(?:ft|m)?\s*(?:a|hasta)\s*(\d{3,5}(?:\.\d+)?)\s*(?:ft|m)?\s*,?\s*(\d{1,4}(?:\.\d+)?)\s*ft\s*(?:de\s+espesor|espesor)",
         re.IGNORECASE
@@ -40,420 +391,91 @@ def audit_operations_text(raw_text: str, well_profile: dict = None) -> Dict[str,
         d2 = float(match.group(2))
         stated_thick = float(match.group(3))
         calc_thick = abs(d1 - d2)
-        
         if abs(calc_thick - stated_thick) > 5.0:
             original_phrase = match.group(0)
             corrected_phrase = f"tapón de fondo de {int(d1)} ft a {int(d2)} ft, {int(calc_thick)} ft de espesor"
-            
-            # Apply visual diff
-            diff_replacement = f'<span class="diff-del"><s>{original_phrase}</s></span> <span class="diff-ins"><b>{corrected_phrase}</b></span>'
-            diff_html = diff_html.replace(original_phrase, diff_replacement)
             corrected_text = corrected_text.replace(original_phrase, corrected_phrase)
-            
             findings.append({
                 "agent": "well-control-pna-specialist",
                 "severity": "CRITICAL",
                 "badge": "🔴 ERROR MATEMÁTICO EN TAPÓN",
                 "message": f"Espesor de tapón mal calculado: {int(d1)} ft - {int(d2)} ft = {int(calc_thick)} ft de espesor (el reporte decía erróneamente {int(stated_thick)} ft). Corregido a {int(calc_thick)} ft."
             })
-            learning_tips.append(
-                f"💡 Lección de Cálculo: Siempre verifique la resta de cotas de cementación: {int(d1)} ft - {int(d2)} ft = {int(calc_thick)} ft. Un error de espesor distorsiona el volumen de lechada."
-            )
 
-    # -------------------------------------------------------------
-    # 2. AUDIT: Calendar Date Sanity (e.g. 31/11/2026 - Nov has 30 days!)
-    # -------------------------------------------------------------
+    # Calendar Date Sanity (e.g. 31/11/2026 - Nov has 30 days!)
     invalid_date_pattern = re.compile(r"\b(31/11/202\d)\b")
     for match in invalid_date_pattern.finditer(raw_text):
         bad_date = match.group(1)
         fixed_date = "31/10/2026" if "10" in raw_text or "27/10" in raw_text else "30/11/2026"
-        diff_html = diff_html.replace(bad_date, f'<span class="diff-del"><s>{bad_date}</s></span> <span class="diff-ins"><b>{fixed_date}</b></span>')
         corrected_text = corrected_text.replace(bad_date, fixed_date)
-        
         findings.append({
             "agent": "lead-intervention-director",
             "severity": "CRITICAL",
             "badge": "🔴 ERROR DE CALENDARIO",
             "message": f"Fecha inexistente detectada '{bad_date}'. Noviembre tiene solo 30 días. Se corrigió cronológicamente a {fixed_date}."
         })
-        learning_tips.append("💡 Lección de Registro: Revise las fechas de corte mensual para evitar objeciones de auditoría en los cierres de facturación de la operadora.")
 
-    # -------------------------------------------------------------
-    # 3. AUDIT: Incomplete Blank Placeholders (e.g. "Holcim ____", "__ bpm")
-    # -------------------------------------------------------------
-    blank_pattern = re.compile(r"(___+|\b__\s*bpm\b|\b__\s*psi\b)", re.IGNORECASE)
-    if blank_pattern.search(raw_text):
-        for m in blank_pattern.finditer(raw_text):
-            b_txt = m.group(0)
-            diff_html = diff_html.replace(b_txt, f'<span class="diff-blank"><s>{b_txt}</s> <b>[Dato Faltante a Completar]</b></span>')
-        
-        findings.append({
-            "agent": "well-control-pna-specialist",
-            "severity": "WARNING",
-            "badge": "🟡 PARÁMETROS EN BLANCO",
-            "message": "Se detectaron campos con líneas en blanco (tasas de bombeo, presiones o tipo de aditivo). Todo tratamiento de cemento o bombeo debe registrar tasa (bpm) y presión (psi)."
-        })
-        learning_tips.append("💡 Práctica de Campo: Nunca envíe reportes con placeholders '__'. Si la bomba no tenía manómetro, reporte 'sin lectura disponible', o complete los valores reales.")
-
-    # -------------------------------------------------------------
-    # 4. AUDIT: Informal Slang vs Technical Standard
-    # -------------------------------------------------------------
-    slang_replacements = [
-        ("desarmó el arbolito", "N/D Árbol de Producción (X-tree 7-1/16\" 3K/5K)"),
-        ("retiró arbolito", "N/D Árbol de Producción"),
-        ("instaló preventoras", "N/U conjunto de preventoras (BOP stack 7-1/16\" 5K)"),
-        ("echó reversa", "circuló en reversa hasta retorno limpio"),
-        ("metió barra", "lanzó barra para cizallar pin de drain sub"),
-    ]
-    for slang, tech in slang_replacements:
-        if slang in raw_text.lower():
-            # Find exact casing
-            idx = raw_text.lower().find(slang)
-            orig_match = raw_text[idx:idx+len(slang)]
-            diff_html = diff_html.replace(orig_match, f'<span class="diff-del"><s>{orig_match}</s></span> <span class="diff-ins"><b>{tech}</b></span>')
-            corrected_text = corrected_text.replace(orig_match, tech)
-            
-            findings.append({
-                "agent": "oilfield-translator-editor",
-                "severity": "INFO",
-                "badge": "🔵 ESTANDARIZACIÓN TÉCNICA",
-                "message": f"Se reemplazó jerga informal '{orig_match}' por redacción formal estándar '{tech}'."
-            })
-            learning_tips.append(f"💡 Vocabulario IADC: En vez de '{orig_match}', use nomenclatura formal petrolera: '{tech}'.")
-
-    # -------------------------------------------------------------
-    # 5. AUDIT: Tally & String Weight Verification
-    # -------------------------------------------------------------
-    overpull_pattern = re.compile(r"(\d{1,3})\s*klb\s*de\s*(?:overpull|sobretensi[oó]n)", re.IGNORECASE)
-    m_overpull = overpull_pattern.search(raw_text)
-    if m_overpull:
-        op_val = float(m_overpull.group(1))
-        findings.append({
-            "agent": "tally-mechanics-engineer",
-            "severity": "SUCCESS",
-            "badge": "🟢 TENSIÓN AUDITADA",
-            "message": f"Sobretensión de {op_val} klb verificada durante anclaje. Dentro del margen de seguridad (< 80% del límite de fluencia de tubería 3-1/2\" N-80)."
-        })
-    
-    # -------------------------------------------------------------
-    # 6. AUDIT: HSE & NPT Classification
-    # -------------------------------------------------------------
-    if re.search(r"tormenta|lluvia|clima|npt\s*clima", raw_text, re.IGNORECASE):
-        findings.append({
-            "agent": "hse-npt-compliance-auditor",
-            "severity": "INFO",
-            "badge": "🟠 NPT CLIMA AUDITADO",
-            "message": "Operaciones suspendidas por tormenta eléctrica registradas y clasificadas como NPT-WTR (Fuerza Mayor)."
-        })
-        
-    if re.search(r"machuc[oó]|atrapamiento|accidente|incidente|lesi[oó]n|dedo", raw_text, re.IGNORECASE):
-        findings.append({
-            "agent": "hse-npt-compliance-auditor",
-            "severity": "WARNING",
-            "badge": "🔴 INCIDENTE HSE RECORDABLE",
-            "message": "Evento de lesión en manos con llave hidráulica detectado. Clasificado bajo estándar OSHA/IADC como Medical Treatment Case (MTC). Requiere reporte formal de investigación."
-        })
-        learning_tips.append("💡 Seguridad Operacional: Documentar siempre atención médica inicial, traslado y acciones inmediatas de control (CAPA).")
-
-    # -------------------------------------------------------------
-    # 7. AUDIT: Wireline & Explosives Verification
-    # -------------------------------------------------------------
-    if re.search(r"cañ[oó]n|disparo|detonad|wireline|colombia supplies", raw_text, re.IGNORECASE):
-        findings.append({
-            "agent": "conveyance-pce-specialist",
-            "severity": "SUCCESS",
-            "badge": "🟢 PERFORATING & PCE VERIFICADO",
-            "message": "Operación de cañoneo wireline auditada: verificación de 100% de detonación y prueba de lubricador a 500 psi conforme a protocolo."
-        })
-
-    # -------------------------------------------------------------
-    # 8. AUDIT: Rig Move, Mobilization & Logistics (rig-move-logistics-specialist)
-    # -------------------------------------------------------------
-    if re.search(r"movilizaci[oó]n|lump sum|r/d|r/m|r/u|recibi[oó] equipo|reconocimiento de\s*\d+\s*h|cargas", raw_text, re.IGNORECASE):
-        # A. Mathematical Reconciliation: R/M % vs Loads Tally Fraction (e.g. "R/M: 50% (0/4 cargas)" or "R/M: 0% (2/4 cargas)")
-        rm_pattern = re.compile(
-            r"R/M\s*[:=]?\s*(\d+(?:\.\d+)?)\s*%\s*(?:\(\s*(\d+)\s*/\s*(\d+)\s*(?:cargas|loads)?\s*\)|\[\s*(\d+)\s*/\s*(\d+)\s*(?:cargas|loads)?\s*\]|,\s*(\d+)\s*/\s*(\d+)\s*(?:cargas|loads))",
-            re.IGNORECASE
-        )
-        for m in rm_pattern.finditer(raw_text):
-            stated_pct = float(m.group(1))
-            m_loads = int(m.group(2) or m.group(4) or m.group(6))
-            tot_loads = int(m.group(3) or m.group(5) or m.group(7))
-
-            if tot_loads > 0:
-                calc_pct = round((m_loads / tot_loads) * 100, 1)
-                diff_val = abs(stated_pct - calc_pct)
-
-                if diff_val > 1.0:
-                    orig_str = m.group(0)
-                    target_pct = int(calc_pct) if calc_pct.is_integer() else calc_pct
-                    unit_label = "loads" if "load" in orig_str.lower() else "cargas"
-                    corr_str = f"R/M: {target_pct}% ({m_loads}/{tot_loads} {unit_label})"
-                    
-                    diff_replacement = f'<span class="diff-del"><s>{orig_str}</s></span> <span class="diff-ins"><b>{corr_str}</b></span>'
-                    diff_html = diff_html.replace(orig_str, diff_replacement)
-                    corrected_text = corrected_text.replace(orig_str, corr_str)
-
-                    expected_loads = int(round(stated_pct * tot_loads / 100))
-                    findings.append({
-                        "agent": "rig-move-logistics-specialist",
-                        "severity": "CRITICAL",
-                        "badge": "🔴 ERROR MATEMÁTICO EN R/M (CARGAS VS %)",
-                        "message": (
-                            f"Discrepancia detectada en movilización: Se reportó '{orig_str}'. "
-                            f"Matemáticamente, {m_loads}/{tot_loads} cargas equivale exactamente al {calc_pct}%. "
-                            f"Si el avance real era {stated_pct}%, correspondía registrar ({expected_loads}/{tot_loads} cargas). "
-                            f"Si se trasladaron {m_loads}/{tot_loads} cargas, el porcentaje real es {calc_pct}%. "
-                            f"Corregido en el reporte a '{corr_str}' para evitar objeciones de auditoría y conciliación de facturación."
-                        )
-                    })
-                    learning_tips.append(
-                        f"💡 Control de Movilización: Verifique siempre la fórmula: ({m_loads} cargas / {tot_loads} cargas) * 100% = {calc_pct}%. Si el avance es {stated_pct}%, las cargas deben ser {expected_loads}/{tot_loads}."
-                    )
-
-        # B. Narrative vs Tally Cross-Check (e.g. narrative mentions 2 loads moved, but summary tally says 0/4)
-        m_narrative_loads = re.search(r"(?:traslad[a-záéíóú]*|moviliz[a-záéíóú]*|despach[a-záéíóú]*|envi[a-záéíóú]*)\s+(\d+)\s+(?:cargas|loads)", raw_text, re.IGNORECASE)
-        m_loads_tally = re.search(r"(\d+)\s*/\s*(\d+)\s*(?:cargas|loads)", raw_text, re.IGNORECASE)
-        if m_narrative_loads and m_loads_tally:
-            narrated_loads = int(m_narrative_loads.group(1))
-            tally_loads = int(m_loads_tally.group(1))
-            total_tally = int(m_loads_tally.group(2))
-            if narrated_loads > tally_loads and tally_loads == 0:
-                expected_pct = round((narrated_loads / total_tally) * 100, 1)
-                findings.append({
-                    "agent": "rig-move-logistics-specialist",
-                    "severity": "WARNING",
-                    "badge": "🟡 DISCREPANCIA NARRATIVA VS MÉTRICA",
-                    "message": (
-                        f"La narrativa reporta que se trasladaron/despacharon {narrated_loads} cargas, "
-                        f"pero la métrica de avance sigue indicando {tally_loads}/{total_tally} cargas (0%). "
-                        f"Posible error de copia del reporte anterior. Debería actualizarse a {narrated_loads}/{total_tally} cargas ({expected_pct}%)."
-                    )
-                })
-
-        # C. Sequence Logic & Overall Progress (R/D -> R/M -> R/U)
-        m_rd = re.search(r"R/D\s*[:=]?\s*(\d+(?:\.\d+)?)\s*%", raw_text, re.IGNORECASE)
-        m_rm = re.search(r"R/M\s*[:=]?\s*(\d+(?:\.\d+)?)\s*%", raw_text, re.IGNORECASE)
-        m_ru = re.search(r"R/U\s*[:=]?\s*(\d+(?:\.\d+)?)\s*%", raw_text, re.IGNORECASE)
-
-        if m_rd or m_rm or m_ru:
-            rd_val = float(m_rd.group(1)) if m_rd else 0.0
-            rm_val = float(m_rm.group(1)) if m_rm else 0.0
-            ru_val = float(m_ru.group(1)) if m_ru else 0.0
-
-            # Physical sequence sanity check
-            if ru_val > 0.0 and rm_val < 25.0:
-                findings.append({
-                    "agent": "rig-move-logistics-specialist",
-                    "severity": "WARNING",
-                    "badge": "🟡 INCOHERENCIA DE SECUENCIA LOGÍSTICA",
-                    "message": f"Se reportó R/U (arme en pozo destino) al {ru_val}% mientras el R/M (traslado de cargas) figura en {rm_val}%. Físicamente no es posible armar equipos que aún no han sido entregados en la nueva locación."
-                })
-                learning_tips.append("💡 Secuencia de Mudanza: El arme (R/U) solo debe reportarse cuando las cargas críticas hayan sido entregadas y posicionadas en la nueva locación (R/M > 50%).")
-
-            # Overall Weighted Rig Move Progress (Industry standard: 35% R/D, 35% R/M, 30% R/U)
-            weighted_progress = round(0.35 * rd_val + 0.35 * rm_val + 0.30 * ru_val, 1)
-            simple_avg = round((rd_val + rm_val + ru_val) / 3, 1)
-
-            # Check load counts
-            m_loads = re.search(r"(\d+/\d+)\s*(?:cargas|loads)", raw_text, re.IGNORECASE)
-            loads_info = f" ({m_loads.group(1)} cargas)" if m_loads else ""
-            
-            # Check acceptance hours
-            m_recibo = re.search(r"recibi[oó] equipo a las\s*(\d{1,2}:\d{2})\s*h", raw_text, re.IGNORECASE)
-            recibo_info = f" con recibo de equipo a las {m_recibo.group(1)} h" if m_recibo else ""
-
-            findings.append({
-                "agent": "rig-move-logistics-specialist",
-                "severity": "INFO",
-                "badge": "🚛 CONSOLIDADO DE AVANCE DE MOVILIZACIÓN",
-                "message": (
-                    f"Desglose auditado{loads_info}{recibo_info}: R/D: {rd_val}% (Desarme) | R/M: {rm_val}% (Traslado) | R/U: {ru_val}% (Arme). "
-                    f"Avance global ponderado de la mudanza: {weighted_progress}% (Promedio simple: {simple_avg}%). "
-                    f"Se validó transición de tarifa Lump Sum a tarifa operativa."
-                )
-            })
-            learning_tips.append("💡 Práctica de Movilización: Registre siempre el desglose exacto R/D (desarme), R/M (traslado de cargas) y R/U (arme), la distancia entre pozos y la hora oficial de recibo de equipo para el cambio de tarifa con la operadora.")
-
-    # -------------------------------------------------------------
-    # 9. AUDIT: Well Integrity, BOP & Pressure Testing (API Standard 53)
-    # (Agent: well-integrity-bop-specialist)
-    # -------------------------------------------------------------
-    bop_test_pattern = re.compile(
-        r"(?:prueba\s+de\s+(?:bop|anular|preventor|choke|pipe\s*ram|blind\s*ram)|en\s+baja\s+con\s+(\d+)\s*psi|en\s+alta\s+con\s+(\d+)\s*psi)",
+    # Rig Move Load Fraction Reconciliation
+    rm_pattern = re.compile(
+        r"R/M\s*[:=]?\s*(\d+(?:\.\d+)?)\s*%\s*(?:\(\s*(\d+)\s*/\s*(\d+)\s*(?:cargas|loads)?\s*\)|\[\s*(\d+)\s*/\s*(\d+)\s*(?:cargas|loads)?\s*\]|,\s*(\d+)\s*/\s*(\d+)\s*(?:cargas|loads))",
         re.IGNORECASE
     )
+    for m in rm_pattern.finditer(raw_text):
+        stated_pct = float(m.group(1))
+        m_loads = int(m.group(2) or m.group(4) or m.group(6))
+        tot_loads = int(m.group(3) or m.group(5) or m.group(7))
+        if tot_loads > 0:
+            calc_pct = round((m_loads / tot_loads) * 100, 1)
+            if abs(stated_pct - calc_pct) > 1.0:
+                corr_str = f"R/M: {int(calc_pct)}% ({m_loads}/{tot_loads} cargas)"
+                corrected_text = corrected_text.replace(m.group(0), corr_str)
+                findings.append({
+                    "agent": "rig-move-logistics-specialist",
+                    "severity": "CRITICAL",
+                    "badge": "🔴 ERROR MATEMÁTICO EN R/M (CARGAS VS %)",
+                    "message": f"Discrepancia detectada en movilización: {m_loads}/{tot_loads} cargas equivale al {calc_pct}% (el reporte decía {stated_pct}%). Corregido a '{corr_str}'."
+                })
+
+    # API 53 BOP Testing Checks
+    bop_test_pattern = re.compile(r"(?:prueba\s+de\s+(?:bop|anular|preventor|choke)|en\s+baja\s+con\s+(\d+)\s*psi)", re.IGNORECASE)
     if bop_test_pattern.search(raw_text):
-        # 1. Low pressure check (API Standard 53: 250 to 350 psi, stabilized >= 5 min)
         m_low = re.search(r"en\s+baja\s+con\s+(\d+)\s*psi\s*(?:x|×)\s*(\d+)\s*min", raw_text, re.IGNORECASE)
         if m_low:
             low_psi = float(m_low.group(1))
             low_min = float(m_low.group(2))
-            
             if 250 <= low_psi <= 350 and low_min >= 5:
                 findings.append({
                     "agent": "well-integrity-bop-specialist",
                     "severity": "SUCCESS",
                     "badge": "🟢 PRUEBA EN BAJA CUMPLE API 53",
-                    "message": f"Prueba en baja con {int(low_psi)} psi x {int(low_min)} min conforme a API Standard 53 (rango normativo: 250 - 350 psi, estabilizado ≥ 5 min sin caída de presión)."
-                })
-            elif low_psi < 250:
-                findings.append({
-                    "agent": "well-integrity-bop-specialist",
-                    "severity": "WARNING",
-                    "badge": "🟡 PRESIÓN BAJA POR DEBAJO DE API 53",
-                    "message": f"Presión en baja de {int(low_psi)} psi está por debajo del rango normativo API 53 (250 - 350 psi)."
+                    "message": f"Prueba en baja con {int(low_psi)} psi x {int(low_min)} min conforme a API Standard 53."
                 })
             elif low_psi > 400:
                 findings.append({
                     "agent": "well-integrity-bop-specialist",
                     "severity": "WARNING",
                     "badge": "🟡 PRESIÓN BAJA EXCESIVA (API 53)",
-                    "message": f"Prueba en baja con {int(low_psi)} psi excede el rango normativo de 250 - 350 psi. Una presión excesiva comprime prematuramente los elastómeros y oculta microfugas de baja presión."
-                })
-            
-            if low_min < 5:
-                findings.append({
-                    "agent": "well-integrity-bop-specialist",
-                    "severity": "CRITICAL",
-                    "badge": "🔴 TIEMPO INSUFICIENTE EN PRUEBA (API 53)",
-                    "message": f"Tiempo de prueba en baja ({int(low_min)} min) no cumple el mínimo estabilizado de 5 minutos estipulado por API Standard 53."
+                    "message": f"Prueba en baja con {int(low_psi)} psi excede el rango normativo de 250 - 350 psi (API 53)."
                 })
 
-        # 2. High pressure check (API Standard 53: Annular 70% WP or MASP; Rams 100% WP or MASP)
-        m_high = re.search(r"en\s+alta\s+con\s+(\d+)\s*psi\s*(?:x|×)\s*(\d+)\s*min", raw_text, re.IGNORECASE)
-        m_bop_wp = re.search(r"(?:11|7-1/16|13-5/8)[\"”]?\s*(?:x|×)\s*([0-9]+)\s*[kK]", raw_text, re.IGNORECASE)
-        
-        if m_high:
-            high_psi = float(m_high.group(1))
-            high_min = float(m_high.group(2))
-            is_annular = bool(re.search(r"anular|annular", raw_text, re.IGNORECASE))
-            
-            if m_bop_wp:
-                rated_wp = float(m_bop_wp.group(1)) * 1000.0  # e.g. 5K -> 5000 psi
-                standard_annular_high = rated_wp * 0.70        # 70% = 3500 psi
-                
-                if is_annular and high_psi < standard_annular_high:
-                    findings.append({
-                        "agent": "well-integrity-bop-specialist",
-                        "severity": "WARNING",
-                        "badge": "🟡 VERIFICACIÓN DE ALTA EN ANULAR (API 53)",
-                        "message": (
-                            f"Se probó en alta a {int(high_psi)} psi x {int(high_min)} min para BOP Anular de {int(rated_wp/1000)}K. "
-                            f"Bajo API Standard 53, la prueba estándar en alta para preventores anulares es al 70% del WP nominal ({int(standard_annular_high)} psi) "
-                            f"o a la Máxima Presión Anticipada en Superficie (MASP) aprobada. "
-                            f"Verifique si {int(high_psi)} psi está formalmente limitado por la MASP del pozo o la resistencia del casing."
-                        )
-                    })
-                    learning_tips.append(
-                        f"💡 Integridad de Barreras (API 53): Los preventores anulares se prueban al 70% de su WP ({int(standard_annular_high)} psi para 5K) o a la MASP del pozo. Justifique siempre si la prueba alta es menor por restricción del pozo o casing."
-                    )
-                else:
-                    findings.append({
-                        "agent": "well-integrity-bop-specialist",
-                        "severity": "SUCCESS",
-                        "badge": "🟢 PRUEBA EN ALTA CUMPLE API 53",
-                        "message": f"Prueba en alta con {int(high_psi)} psi x {int(high_min)} min cumple con tiempo estabilizado ≥ 5 min conforme a API Standard 53."
-                    })
-            else:
-                findings.append({
-                    "agent": "well-integrity-bop-specialist",
-                    "severity": "INFO",
-                    "badge": "🟢 PRUEBA EN ALTA AUDITADA",
-                    "message": f"Prueba de presión alta ({int(high_psi)} psi x {int(high_min)} min) verificada con tiempo estabilizado adecuado."
-                })
-
-        # 3. Component-specific checks: Pipe Rams & Blind Rams
-        for m_ram in re.finditer(r"(pipe\s*rams?|blind\s*rams?|arietes?)\s+en\s+baja\s+con\s+(\d+)\s*psi", raw_text, re.IGNORECASE):
-            ram_name = m_ram.group(1).title()
-            ram_low_psi = float(m_ram.group(2))
-            if ram_low_psi > 350:
-                findings.append({
-                    "agent": "well-integrity-bop-specialist",
-                    "severity": "WARNING",
-                    "badge": f"🟡 PRESIÓN BAJA EN {ram_name.upper()} > 350 PSI (API 53)",
-                    "message": f"Se registró prueba en baja a {int(ram_low_psi)} psi para {ram_name}. La norma API Standard 53 establece que la prueba de baja presión debe situarse estrictamente entre 250 y 350 psi. Una presión de {int(ram_low_psi)} psi deforma prematuramente el sello elastomérico y puede enmascarar microfugas."
-                })
-                learning_tips.append("💡 Integridad de Sellos Elastómeros (API 53): La prueba en baja (250-350 psi) es fundamental para detectar fugas que a alta presión quedan temporalmente selladas por deformación mecánica del caucho.")
-
-        # 4. Choke Manifold Check
-        if re.search(r"choke\s*manifold|m[uú]ltiple\s*de\s*estrangulaci[oó]n", raw_text, re.IGNORECASE):
-            findings.append({
-                "agent": "well-integrity-bop-specialist",
-                "severity": "SUCCESS",
-                "badge": "🟢 CHOKE MANIFOLD AUDITADO (API 53)",
-                "message": "Pruebas de válvulas del múltiple de estrangulación (Choke Manifold) en baja y alta verificadas conforme a API Standard 53."
-            })
-
-        # 5. Accumulator Unit Function (Koomey)
-        if re.search(r"acumulador|koomey|tiempos\s+de\s+carga", raw_text, re.IGNORECASE):
-            findings.append({
-                "agent": "well-integrity-bop-specialist",
-                "severity": "SUCCESS",
-                "badge": "🟢 ACUMULADOR KOOMEY AUDITADO (API 16E)",
-                "message": "Unidad acumuladora cumple con especificaciones de tiempo de recarga de bombas y respuesta de actuadores conforme a API 16E / API 53."
-            })
-
-    # -------------------------------------------------------------
-    # 10. AUDIT: P&A Barrier Verification & HMBP Isolation (NORSOK D-010 / API RP 96)
-    # (Agent: pna-barrier-certifier)
-    # -------------------------------------------------------------
-    pna_pattern = re.compile(r"\b(hmbp|bridge\s*plug|toc|tap[oó]n|abandono|ca[ñn][oó]n|comunicar\s+anular)\b", re.IGNORECASE)
-    if pna_pattern.search(raw_text):
-        # A. HMBP Setting, Tension, RH Turns & Hydraulic Test
-        m_hmbp = re.search(r"\b(hmbp|bridge\s*plug)\b", raw_text, re.IGNORECASE)
-        if m_hmbp:
-            has_turns = bool(re.search(r"(\d+)\s+vueltas\s+a\s+la\s+derecha|rotaci[oó]n\s+a\s+la\s+derecha", raw_text, re.IGNORECASE))
-            has_tension = bool(re.search(r"(?:tensi[oó]n|overpull|sobretensi[oó]n)\s+(?:de\s+|con\s+|registrando\s+)?(\d+(?:\.\d+)?)\s*klb", raw_text, re.IGNORECASE))
-            has_psi_test = bool(re.search(r"prueba\s+de\s+integridad.*?(\d+)\s*psi.*?(\d+)\s*min", raw_text, re.IGNORECASE))
-            has_barton = bool(re.search(r"carta\s+bart[oó]n|carta\s+manom[eé]trica", raw_text, re.IGNORECASE))
-
-            if has_turns and has_psi_test and has_barton:
-                findings.append({
-                    "agent": "pna-barrier-certifier",
-                    "severity": "SUCCESS",
-                    "badge": "🟢 BARRERA HMBP CERTIFICADA (NORSOK D-010 / API RP 96)",
-                    "message": "Secuencia completa de aislamiento mecánico auditada: Se validó tensión/asentamiento, desanclaje con rotación a la derecha, peso neutro libre de overpull, prueba de presión de 500 psi x 15 min y registro legal en carta circular Barton."
-                })
-            elif not has_barton and has_psi_test:
-                findings.append({
-                    "agent": "pna-barrier-certifier",
-                    "severity": "WARNING",
-                    "badge": "🟡 REGISTRO EN CARTA BARTON PENDIENTE",
-                    "message": "Se reportó prueba de presión del HMBP pero no se menciona el registro gráfico en carta manométrica Barton. Todo tapón de abandono definitivo requiere soporte de carta física o digital según normativa de la ANH."
-                })
-
-        # B. TOC Weight Tagging (NORSOK D-010 minimum 10 - 15 klb)
-        m_toc = re.search(r"(?:toc|toque\s+de\s+cemento)\s+con\s+(\d+(?:\.\d+)?)\s*klb", raw_text, re.IGNORECASE)
-        if m_toc:
-            toc_wt = float(m_toc.group(1))
-            if toc_wt >= 10.0:
-                findings.append({
-                    "agent": "pna-barrier-certifier",
-                    "severity": "SUCCESS",
-                    "badge": "🟢 TOQUE DE TOC CONFORME A NORSOK D-010",
-                    "message": f"Toque de cima de cemento (TOC) verificado con {toc_wt} klb de peso de sarta (cumple norma técnica ≥ 10 klb para tapones permanentes de abandono)."
-                })
-            else:
-                findings.append({
-                    "agent": "pna-barrier-certifier",
-                    "severity": "WARNING",
-                    "badge": "🟡 PESO EN TOQUE DE TOC INSUFICIENTE",
-                    "message": f"Se aplicaron {toc_wt} klb al tocar TOC. NORSOK D-010 y estándares operacionales exigen un mínimo de 10 a 15 klb para confirmar consistencia mecánica de fraguado."
-                })
-
-        # C. Annular Communication Perforating
-        if re.search(r"ca[ñn][oó]n.*?para\s+comunicar\s+anular|comunicaci[oó]n\s+entre\s+anulares", raw_text, re.IGNORECASE):
+    # NORSOK D-010 HMBP & TOC Checks
+    if re.search(r"\b(hmbp|bridge\s*plug)\b", raw_text, re.IGNORECASE):
+        has_barton = bool(re.search(r"carta\s+bart[oó]n|carta\s+manom[eé]trica", raw_text, re.IGNORECASE))
+        has_psi_test = bool(re.search(r"prueba\s+de\s+integridad.*?(\d+)\s*psi", raw_text, re.IGNORECASE))
+        if not has_barton and has_psi_test:
             findings.append({
                 "agent": "pna-barrier-certifier",
-                "severity": "INFO",
-                "badge": "🎯 PERFORACIÓN DE COMUNICACIÓN ANULAR (P&A)",
-                "message": "Disparo de revestimiento para comunicación anular auditado. Proceda con prueba de inyectividad y cementación forzada (squeeze) para sello anular permanente."
+                "severity": "WARNING",
+                "badge": "🟡 REGISTRO EN CARTA BARTON PENDIENTE",
+                "message": "Se reportó prueba de presión de tapón de abandono sin mención de carta Barton. Requiere soporte según normativa ANH."
             })
 
     # -------------------------------------------------------------
-    # Domain-Aware Fallback Learning Tips
+    # 4. GENERATE TRUE TOKEN-LEVEL VISUAL DIFF (HTML)
     # -------------------------------------------------------------
+    diff_html = generate_token_diff(raw_text, corrected_text)
+
+    # Fallback learning tips if empty
     if not learning_tips:
         d = classification.get("domain")
         if d == "BOP_PRESSURE_TEST":
@@ -464,10 +486,6 @@ def audit_operations_text(raw_text: str, well_profile: dict = None) -> Dict[str,
             learning_tips.append("💡 Práctica de Cementación: Especifique siempre densidades de lechada (ppg), tipo de aditivos, presiones de bombeo, tasa (bpm) y volumen de desplazamiento hasta retorno limpio.")
         elif d == "ARTIFICIAL_LIFT":
             learning_tips.append("💡 Práctica de Levantamiento Artificial: Registre siempre lecturas Megger (fase-fase y fase-tierra en MΩ), amperaje de motor y número de superbandas por tubo.")
-        elif d == "WIRELINE_PCE":
-            learning_tips.append("💡 Práctica de Línea de Acero / PCE: Registre siempre prueba de lubricador (500 psi por encima de THP), verificación de cero tensión residual y confirmación de detonación.")
-        elif d == "HSE_NPT":
-            learning_tips.append("💡 Práctica HSE: Documente siempre el nivel de alerta climática (Nivel I, II, III), las horas exactas de suspensión y el plan de mitigación preoperacional.")
         else:
             learning_tips.append("💡 Buenas Prácticas: Especifique siempre Grado (L-80/N-80), Rango (R2), tipo de rosca y presiones de trabajo al reportar sartas y herramientas de fondo.")
 

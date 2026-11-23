@@ -32,6 +32,8 @@ class ApiKeyConfigRequest(BaseModel):
 class AuditRequest(BaseModel):
     raw_text: str
     well_name: Optional[str] = "Yopo-1"
+    api_key: Optional[str] = None
+    provider: Optional[str] = "auto"
 
 class TranslateRequest(BaseModel):
     polished_spanish: str
@@ -92,15 +94,16 @@ async def api_audit(req: AuditRequest):
     chrono_result = parse_raw_timeline(raw_text)
     
     # 2. QA/QC Audit, Visual Diff & Learning Tips
-    audit_result = audit_operations_text(raw_text)
+    effective_api_key = req.api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY")
+    audit_result = audit_operations_text(raw_text, api_key=effective_api_key, provider=req.provider or "auto", well_name=req.well_name)
     
     # 3. Maturity Score (0% to 100%)
     maturity_result = calculate_maturity_score(audit_result["corrected_spanish"])
 
     # 4. Pre-Flight Health Indicators
-    has_math_errors = any("ERROR MATEMÁTICO" in f.get("badge", "") for f in audit_result["agent_findings"])
-    has_blank_fields = any("PARÁMETROS EN BLANCO" in f.get("badge", "") for f in audit_result["agent_findings"])
-    has_norsok_ok = any("NORSOK" in f.get("badge", "") or "API 53" in f.get("badge", "") for f in audit_result["agent_findings"])
+    has_math_errors = any("ERROR MATEMÁTICO" in f.get("badge", "") or "ERROR CRÍTICO" in f.get("badge", "") or "INCONSISTENCIA" in f.get("badge", "") for f in audit_result["agent_findings"])
+    has_blank_fields = any("PARÁMETROS EN BLANCO" in f.get("badge", "") or "PARÁMETROS DE BOMBEO INCOMPLETOS" in f.get("badge", "") for f in audit_result["agent_findings"]) or ("[" in audit_result["corrected_spanish"] and "]" in audit_result["corrected_spanish"])
+    has_norsok_ok = any("NORSOK" in f.get("badge", "") or "API 53" in f.get("badge", "") or "API" in f.get("badge", "") for f in audit_result["agent_findings"])
     
     return {
         "chronology": chrono_result,
@@ -841,13 +844,18 @@ async def index():
                 btnAudit.innerText = '⏳ Auditando...';
             }
 
+            const clientKey = getClientApiKey();
+            const clientProvider = getClientProvider();
+
             try {
                 const response = await fetch('/api/audit', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         raw_text: rawText,
-                        well_name: wellName
+                        well_name: wellName,
+                        api_key: clientKey,
+                        provider: clientProvider
                     })
                 });
 
