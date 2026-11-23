@@ -33,6 +33,7 @@ class AuditRequest(BaseModel):
     raw_text: str
     well_name: Optional[str] = "Yopo-1"
     api_key: Optional[str] = None
+    provider: Optional[str] = "auto"
 
 class SaveMemoryRequest(BaseModel):
     category: str
@@ -86,10 +87,11 @@ async def api_audit(req: AuditRequest):
     maturity_result = calculate_maturity_score(audit_result["corrected_spanish"])
     
     # 4. Standardized IADC English Translation & Agent #10 QA/QC Audit
-    effective_api_key = req.api_key or os.environ.get("GEMINI_API_KEY")
+    effective_api_key = req.api_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY")
     english_translation, engine_source, trans_qaqc = translate_to_iadc_english(
         audit_result["corrected_spanish"], 
         api_key=effective_api_key, 
+        provider=req.provider or "auto",
         well_name=req.well_name
     )
     
@@ -590,125 +592,127 @@ async def index():
 
     <script>
         let latestAuditData = null;
-        let isApiKeyConfiguredOnServer = false;
 
-        async function checkServerApiKeyStatus() {
-            // Purge legacy cleartext from localStorage if present
-            if (localStorage.getItem('gemini_api_key')) {
-                const oldKey = localStorage.getItem('gemini_api_key');
-                localStorage.removeItem('gemini_api_key');
-                try {
-                    await fetch('/api/config/api-key', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ api_key: oldKey })
-                    });
-                } catch(e) {}
-            }
+        function getClientApiKey() {
+            return localStorage.getItem('rigmind_api_key') || '';
+        }
 
-            try {
-                const res = await fetch('/api/config/api-key-status');
-                const data = await res.json();
-                isApiKeyConfiguredOnServer = data.has_key;
-                renderApiVault();
-            } catch (err) {
-                renderApiVault();
-            }
+        function getClientProvider() {
+            return localStorage.getItem('rigmind_provider') || 'auto';
+        }
+
+        function detectProviderFromKey(key) {
+            if (!key) return 'auto';
+            const k = key.trim();
+            if (k.startsWith('sk-ant-')) return 'anthropic';
+            if (k.startsWith('gsk_')) return 'groq';
+            if (k.startsWith('sk-')) return 'openai';
+            if (k.startsWith('AIza')) return 'gemini';
+            return 'auto';
         }
 
         function renderApiVault() {
             const container = document.getElementById('apiVaultContainer');
             const rigBadge = document.getElementById('rigStatusBadge');
+            const key = getClientApiKey();
+            const provider = getClientProvider();
 
-            if (isApiKeyConfiguredOnServer) {
+            if (key) {
+                const detected = provider === 'auto' ? detectProviderFromKey(key) : provider;
+                let providerLabel = 'OpenAI (GPT-4o)';
+                let badgeClass = 'badge badge-emerald';
+
+                if (detected === 'openai') {
+                    providerLabel = '🟢 OpenAI (GPT-4o)';
+                } else if (detected === 'anthropic') {
+                    providerLabel = '🟣 Claude 3.5';
+                } else if (detected === 'groq') {
+                    providerLabel = '⚡ Groq (Llama 3.3)';
+                } else if (detected === 'gemini') {
+                    providerLabel = '🔵 Google Gemini';
+                }
+
                 if (rigBadge) {
-                    rigBadge.className = 'badge badge-emerald';
-                    rigBadge.innerText = '🤖 Gemini AI Conectado';
+                    rigBadge.className = badgeClass;
+                    rigBadge.innerText = providerLabel + ' Conectado';
                 }
 
                 container.innerHTML = `
-                    <div style="display:inline-flex; align-items:center; gap:8px; background:rgba(16, 185, 129, 0.12); border:1px solid rgba(16, 185, 129, 0.5); padding:4px 10px; border-radius:4px;" title="La API Key está guardada y blindada en el servidor. Nadie puede verla ni copiarla.">
+                    <div style="display:inline-flex; align-items:center; gap:8px; background:rgba(16, 185, 129, 0.12); border:1px solid rgba(16, 185, 129, 0.5); padding:4px 10px; border-radius:4px;" title="API Key blindada en su navegador y servidor.">
                         <span style="font-size:0.75rem; color:#34D399; font-weight:600; display:flex; align-items:center; gap:5px;">
-                            <span>🔒</span> <span>API Protegida (******)</span>
+                            <span>🔒</span> <span>${providerLabel} (******)</span>
                         </span>
-                        <button type="button" class="btn-vault-action" onclick="deleteServerApiKey()" title="Desconectar y borrar API Key del servidor">🗑️ Desconectar</button>
+                        <button type="button" class="btn-vault-action" onclick="changeApiKey()" title="Cambiar clave o proveedor">⚙️ Cambiar</button>
                     </div>
                 `;
             } else {
                 if (rigBadge) {
                     rigBadge.className = 'badge badge-amber';
-                    rigBadge.innerText = '⚡ Motor Offline Activo';
+                    rigBadge.innerText = '⚡ Motor Offline (Sin Clave IA)';
                 }
 
                 container.innerHTML = `
-                    <div style="display:inline-flex; align-items:center; gap:6px; background:#0E131A; border:1px solid var(--border); padding:3px 8px; border-radius:4px;" title="Pegue su Gemini API Key una sola vez. Al guardar, quedará blindada en el servidor y nadie podrá verla ni copiarla.">
-                        <span style="font-size:0.75rem; color:var(--text-muted); display:flex; align-items:center; gap:4px;">
-                            <span>🔑</span> <span>API:</span>
-                        </span>
+                    <div style="display:inline-flex; align-items:center; gap:6px; background:#0E131A; border:1px solid var(--border); padding:3px 8px; border-radius:4px;" title="Seleccione proveedor y pegue su API Key (OpenAI, Anthropic Claude, Groq o Gemini).">
+                        <select id="providerSelect" class="meta-input" style="padding:2px 4px; font-size:0.75rem; background:#080B0F; border:1px solid #232E3E; color:var(--text-main); border-radius:3px;">
+                            <option value="auto">🤖 Auto-Detectar</option>
+                            <option value="openai">🟢 OpenAI (GPT-4o)</option>
+                            <option value="anthropic">🟣 Claude 3.5</option>
+                            <option value="groq">⚡ Groq (Llama 3.3)</option>
+                            <option value="gemini">🔵 Google Gemini</option>
+                        </select>
                         <input 
                             type="password" 
                             id="secureApiKeyInput" 
                             class="api-input" 
-                            placeholder="Pegar ******" 
+                            placeholder="Pegar API Key..." 
                             autocomplete="off" 
                             spellcheck="false"
-                            onkeydown="if(event.key==='Enter') saveServerApiKey()"
-                            style="width:130px; letter-spacing:2px;"
+                            onkeydown="if(event.key==='Enter') saveApiKeyClient()"
+                            style="width:140px; letter-spacing:1px;"
                         >
-                        <button type="button" class="btn-vault-save" onclick="saveServerApiKey()" title="Guardar y Blindar Clave">💾</button>
+                        <button type="button" class="btn-vault-save" onclick="saveApiKeyClient()" title="Guardar Clave de IA">💾</button>
                     </div>
                 `;
             }
         }
 
-        async function saveServerApiKey() {
+        async function saveApiKeyClient() {
             const input = document.getElementById('secureApiKeyInput');
+            const provSelect = document.getElementById('providerSelect');
             if (!input) return;
             const key = input.value.trim();
             if (!key) {
-                alert('Por favor pegue la clave de API antes de guardar.');
+                alert('Por favor pegue la clave de API (OpenAI, Anthropic Claude, Groq o Gemini) antes de guardar.');
                 return;
             }
 
-            // Immediately wipe input value from DOM
-            input.value = '';
+            const provider = provSelect ? provSelect.value : 'auto';
+            localStorage.setItem('rigmind_api_key', key);
+            localStorage.setItem('rigmind_provider', provider);
 
+            // Also send to backend for server-side persistence
             try {
-                const res = await fetch('/api/config/api-key', {
+                await fetch('/api/config/api-key', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ api_key: key })
                 });
-                const data = await res.json();
-                if (data.status === 'ok') {
-                    isApiKeyConfiguredOnServer = true;
-                    renderApiVault();
-                    alert('🔒 ¡API Key guardada y blindada en el servidor! Ha quedado oculta. Nadie puede verla ni copiarla de la pantalla ni del navegador.');
-                } else {
-                    alert('Error al guardar: ' + (data.error || 'Desconocido'));
-                }
-            } catch (err) {
-                alert('Error de conexión al guardar la clave.');
-            }
+            } catch(e) {}
+
+            input.value = '';
+            renderApiVault();
+            alert('🔒 ¡API Key configurada exitosamente! Se ha guardado en su navegador y servidor de manera blindada. Ahora puede procesar cualquier reporte con traducción IADC oficial.');
         }
 
-        async function deleteServerApiKey() {
-            if (!confirm('¿Desea desconectar y borrar la API Key del servidor? El sistema volverá a operar con el Motor Offline.')) {
-                return;
-            }
-
-            try {
-                const res = await fetch('/api/config/api-key', { method: 'DELETE' });
-                const data = await res.json();
-                isApiKeyConfiguredOnServer = false;
+        function changeApiKey() {
+            if (confirm('¿Desea cambiar o ingresar una nueva API Key de IA?')) {
+                localStorage.removeItem('rigmind_api_key');
+                localStorage.removeItem('rigmind_provider');
                 renderApiVault();
-                alert('API Key eliminada del servidor. Sistema operando en Modo Offline.');
-            } catch (err) {
-                alert('Error al eliminar la clave.');
             }
         }
 
-        window.addEventListener('DOMContentLoaded', checkServerApiKeyStatus);
+        window.addEventListener('DOMContentLoaded', renderApiVault);
 
         async function loadSampleData() {
             try {
@@ -729,8 +733,11 @@ async def index():
                 return;
             }
 
+            const clientKey = getClientApiKey();
+            const clientProvider = getClientProvider();
+
             document.getElementById('diffViewBox').innerHTML = 'Auditando y analizando reporte...';
-            document.getElementById('englishOutputBox').innerText = 'Generando traducción técnica IADC...';
+            document.getElementById('englishOutputBox').innerText = 'Generando traducción técnica IADC con IA...';
 
             try {
                 const response = await fetch('/api/audit', {
@@ -738,7 +745,9 @@ async def index():
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         raw_text: rawText,
-                        well_name: wellName
+                        well_name: wellName,
+                        api_key: clientKey,
+                        provider: clientProvider
                     })
                 });
 

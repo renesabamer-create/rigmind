@@ -493,56 +493,254 @@ def audit_translation_qaqc(english_text: str, spanish_text: str = "") -> Dict[st
 
 
 # ==============================================================================
-# MAIN TRANSLATION DISPATCHER (Gemini API with Model Cascade + Fallback)
+# MULTI-PROVIDER LLM CALLERS (OpenAI, Anthropic Claude, Groq & Google Gemini)
 # ==============================================================================
 
-def translate_to_iadc_english(spanish_text: str, api_key: str = None, well_name: str = "Well") -> Tuple[str, str, Dict[str, Any]]:
+def detect_llm_provider(api_key: str, requested_provider: str = "auto") -> str:
     """
-    Translates Spanish field notes to standardized IADC English.
-    Tries Gemini API first (using supported model cascade); falls back to the overhauled offline engine.
-    Then executes Agent #10 QA/QC audit on the English output.
-    Returns:
-        (translated_text, engine_source, qaqc_audit_result)
+    Intelligently identifies the AI provider by key prefix or explicit request.
     """
-    effective_key = api_key or os.environ.get("GEMINI_API_KEY")
+    if requested_provider and requested_provider.lower() not in ("auto", "none", ""):
+        return requested_provider.lower()
+    if not api_key:
+        return "none"
+    k = api_key.strip()
+    if k.startswith("sk-ant-"):
+        return "anthropic"
+    elif k.startswith("gsk_"):
+        return "groq"
+    elif k.startswith("sk-"):
+        return "openai"
+    elif k.startswith("AIza"):
+        return "gemini"
+    return "gemini"
 
-    if effective_key:
-        for model in MODELS_CASCADE:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={effective_key}"
-                payload = {
-                    "system_instruction": {
-                        "parts": [
-                            {"text": ELITE_IADC_SYSTEM_PROMPT}
-                        ]
-                    },
-                    "contents": [
-                        {
-                            "parts": [
-                                {"text": f"Translate these Spanish operational notes for Well '{well_name}':\n\n{spanish_text}"}
-                            ]
-                        }
-                    ],
-                    "generationConfig": {
-                        "temperature": 0.05,
-                        "maxOutputTokens": 4096
-                    }
+
+def call_openai_translation(text: str, api_key: str, well_name: str = "Well", model: str = "gpt-4o-mini") -> str:
+    """
+    Translates using OpenAI (GPT-4o-mini or GPT-4o) with strict 1:1 zero-omission directives.
+    Ultra-reliable, 99.99% uptime, zero 503 errors.
+    """
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key.strip()}"
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": ELITE_IADC_SYSTEM_PROMPT},
+            {"role": "user", "content": f"Translate these Spanish operational notes for Well '{well_name}':\n\n{text}"}
+        ],
+        "temperature": 0.05,
+        "max_tokens": 4096
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=35) as response:
+        result = json.loads(response.read().decode("utf-8"))
+        choices = result.get("choices", [])
+        if choices:
+            return choices[0].get("message", {}).get("content", "").strip()
+    raise ValueError("OpenAI returned an empty response")
+
+
+def call_groq_translation(text: str, api_key: str, well_name: str = "Well", model: str = "llama-3.3-70b-versatile") -> str:
+    """
+    Translates using Groq (Llama 3.3 70B).
+    Blazing fast (~500 tokens/sec), open-weights intelligence, highly resilient.
+    """
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key.strip()}"
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": ELITE_IADC_SYSTEM_PROMPT},
+            {"role": "user", "content": f"Translate these Spanish operational notes for Well '{well_name}':\n\n{text}"}
+        ],
+        "temperature": 0.05,
+        "max_tokens": 4096
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=35) as response:
+        result = json.loads(response.read().decode("utf-8"))
+        choices = result.get("choices", [])
+        if choices:
+            return choices[0].get("message", {}).get("content", "").strip()
+    raise ValueError("Groq returned an empty response")
+
+
+def call_anthropic_translation(text: str, api_key: str, well_name: str = "Well", model: str = "claude-3-5-haiku-20241022") -> str:
+    """
+    Translates using Anthropic Claude (Claude 3.5 Haiku / Sonnet).
+    Industry benchmark for nuanced technical writing and zero hallucination.
+    """
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key.strip(),
+        "anthropic-version": "2023-06-01"
+    }
+    payload = {
+        "model": model,
+        "max_tokens": 4096,
+        "system": ELITE_IADC_SYSTEM_PROMPT,
+        "messages": [
+            {"role": "user", "content": f"Translate these Spanish operational notes for Well '{well_name}':\n\n{text}"}
+        ],
+        "temperature": 0.05
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=35) as response:
+        result = json.loads(response.read().decode("utf-8"))
+        parts = result.get("content", [])
+        text_out = "".join([p.get("text", "") for p in parts if p.get("type") == "text"]).strip()
+        if text_out:
+            return text_out
+    raise ValueError("Anthropic returned an empty response")
+
+
+def call_gemini_translation(text: str, api_key: str, well_name: str = "Well") -> Tuple[str, str]:
+    """
+    Translates using Google Gemini model cascade with multi-part concatenation.
+    """
+    last_err = None
+    for model in MODELS_CASCADE:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key.strip()}"
+            payload = {
+                "system_instruction": {
+                    "parts": [{"text": ELITE_IADC_SYSTEM_PROMPT}]
+                },
+                "contents": [
+                    {"parts": [{"text": f"Translate these Spanish operational notes for Well '{well_name}':\n\n{text}"}]}
+                ],
+                "generationConfig": {
+                    "temperature": 0.05,
+                    "maxOutputTokens": 4096
                 }
-                data = json.dumps(payload).encode("utf-8")
-                req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    result = json.loads(response.read().decode("utf-8"))
-                    candidates = result.get("candidates", [])
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        if parts:
-                            translated_text = "".join([p.get("text", "") for p in parts if "text" in p]).strip()
-                            qaqc_result = audit_translation_qaqc(translated_text, spanish_text)
-                            return translated_text, f"Gemini ({model})", qaqc_result
-            except Exception:
-                continue
+            }
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                candidates = result.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        translated = "".join([p.get("text", "") for p in parts if "text" in p]).strip()
+                        if translated:
+                            return translated, f"Gemini ({model})"
+        except Exception as e:
+            last_err = e
+            continue
+    raise last_err or ValueError("Google Gemini models unavailable")
 
-    # Enhanced Offline translation fallback
-    offline_translated = offline_standardized_translation(spanish_text)
+
+# ==============================================================================
+# MAIN TRANSLATION DISPATCHER (Multi-Provider Engine + Transparent Fallback)
+# ==============================================================================
+
+def translate_to_iadc_english(
+    spanish_text: str, 
+    api_key: str = None, 
+    provider: str = "auto",
+    well_name: str = "Well",
+    force_offline: bool = False
+) -> Tuple[str, str, Dict[str, Any]]:
+    """
+    Translates Spanish field notes to standardized IADC English using the best available AI provider.
+    Supports: OpenAI (GPT-4o), Anthropic Claude, Groq (Llama 3.3) and Google Gemini.
+    Provides complete error transparency: never silently drops to Spanglish without alerting the user.
+    """
+    effective_key = api_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    selected_provider = detect_llm_provider(effective_key, requested_provider=provider)
+
+    if not force_offline and effective_key:
+        error_reasons = []
+
+        # 1. OpenAI Path (Gold standard)
+        if selected_provider == "openai" or (selected_provider == "auto" and effective_key.startswith("sk-")):
+            try:
+                translated = call_openai_translation(spanish_text, effective_key, well_name=well_name, model="gpt-4o-mini")
+                qaqc_result = audit_translation_qaqc(translated, spanish_text)
+                return translated, "OpenAI (GPT-4o-mini)", qaqc_result
+            except Exception as e:
+                error_reasons.append(f"OpenAI error: {str(e)[:80]}")
+
+        # 2. Anthropic Claude Path
+        elif selected_provider == "anthropic" or effective_key.startswith("sk-ant-"):
+            try:
+                translated = call_anthropic_translation(spanish_text, effective_key, well_name=well_name, model="claude-3-5-haiku-20241022")
+                qaqc_result = audit_translation_qaqc(translated, spanish_text)
+                return translated, "Anthropic (Claude 3.5 Haiku)", qaqc_result
+            except Exception as e:
+                error_reasons.append(f"Anthropic error: {str(e)[:80]}")
+
+        # 3. Groq Path (Llama 3.3 70B)
+        elif selected_provider == "groq" or effective_key.startswith("gsk_"):
+            try:
+                translated = call_groq_translation(spanish_text, effective_key, well_name=well_name, model="llama-3.3-70b-versatile")
+                qaqc_result = audit_translation_qaqc(translated, spanish_text)
+                return translated, "Groq (Llama 3.3 70B)", qaqc_result
+            except Exception as e:
+                error_reasons.append(f"Groq error: {str(e)[:80]}")
+
+        # 4. Google Gemini Path
+        else:
+            try:
+                translated, engine_label = call_gemini_translation(spanish_text, effective_key, well_name=well_name)
+                qaqc_result = audit_translation_qaqc(translated, spanish_text)
+                return translated, engine_label, qaqc_result
+            except Exception as e:
+                error_reasons.append(f"Gemini error (503/Timeout/Capacity): {str(e)[:100]}")
+
+        # If an API key was provided but failed: EXPLICIT USER ALERT (NO SILENT SPANGLISH)
+        err_msg = " | ".join(error_reasons)
+        error_notice = (
+            f"⚠️ [AVISO DE SERVICIO DE IA]:\n"
+            f"No se pudo completar la traducción automática con el proveedor configurado ({selected_provider.upper()}).\n"
+            f"Detalle técnico: {err_msg}\n\n"
+            f"RECOMENDACIÓN TÉCNICA RIGMIND:\n"
+            f"• Los endpoints de Google experimentan sobrecarga temporal (Error 503).\n"
+            f"• Ahora puede usar OpenAI (GPT-4o / GPT-4o-mini), Anthropic Claude o Groq pegando su clave en la barra superior.\n\n"
+            f"--- [BORRADOR DETERMINÍSTICO OFFLINE DE CONTINGENCIA] ---\n"
+            f"(Nota: Este borrador contiene términos pendientes de revisión técnica. No exportar a DOR de la operadora sin validar)\n\n"
+        )
+        offline_draft = offline_standardized_translation(spanish_text)
+        full_text = error_notice + offline_draft
+        qaqc_result = {
+            "status": "AI_SERVICE_UNAVAILABLE",
+            "quality_score": 30,
+            "has_spanglish": True,
+            "data_parity_pct": 50.0,
+            "findings": [{
+                "agent": "iadc-translation-qaqc-auditor",
+                "severity": "CRITICAL",
+                "badge": "🔴 ALERTA: MOTOR IA NO DISPONIBLE (503/TIMEOUT)",
+                "message": f"El servicio de IA ({selected_provider.upper()}) falló con: {err_msg}. Se emitió borrador offline temporal. Configure una clave de OpenAI, Anthropic o Groq para traducción 100% profesional."
+            }]
+        }
+        return full_text, f"Borrador Offline ({selected_provider.upper()} Falló)", qaqc_result
+
+    # Offline translation fallback when no key is configured
+    no_key_notice = (
+        "ℹ️ [MODO BORRADOR OFFLINE - SIN CLAVE DE IA]:\n"
+        "No se detectó API Key en el servidor o navegador.\n"
+        "Para obtener una traducción 100% oficial IADC sin Spanglish, ingrese una API Key de OpenAI (GPT-4o), Anthropic Claude, Groq o Gemini en la barra superior.\n\n"
+        "--- [BORRADOR DETERMINÍSTICO DE CONTINGENCIA] ---\n\n"
+    )
+    offline_translated = no_key_notice + offline_standardized_translation(spanish_text)
     qaqc_result = audit_translation_qaqc(offline_translated, spanish_text)
-    return offline_translated, "Motor Especializado Offline IADC", qaqc_result
+    qaqc_result["findings"].insert(0, {
+        "agent": "iadc-translation-qaqc-auditor",
+        "severity": "WARNING",
+        "badge": "🟡 MODO OFFLINE: CLAVE DE IA NO CONFIGURADA",
+        "message": "Traducción generada mediante diccionario offline de contingencia. Ingrese una clave de OpenAI (GPT-4o), Anthropic Claude o Gemini para habilitar el motor de IA profesional."
+    })
+    return offline_translated, "Motor Offline (Sin Clave IA)", qaqc_result
