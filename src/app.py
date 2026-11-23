@@ -32,6 +32,10 @@ class ApiKeyConfigRequest(BaseModel):
 class AuditRequest(BaseModel):
     raw_text: str
     well_name: Optional[str] = "Yopo-1"
+
+class TranslateRequest(BaseModel):
+    polished_spanish: str
+    well_name: Optional[str] = "Yopo-1"
     api_key: Optional[str] = None
     provider: Optional[str] = "auto"
 
@@ -44,7 +48,7 @@ class SaveMemoryRequest(BaseModel):
 
 @app.get("/api/config/api-key-status")
 async def get_api_key_status():
-    return {"has_key": bool(os.environ.get("GEMINI_API_KEY"))}
+    return {"has_key": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY"))}
 
 @app.post("/api/config/api-key")
 async def save_api_key(req: ApiKeyConfigRequest):
@@ -62,8 +66,9 @@ async def save_api_key(req: ApiKeyConfigRequest):
 
 @app.delete("/api/config/api-key")
 async def delete_api_key():
-    if "GEMINI_API_KEY" in os.environ:
-        del os.environ["GEMINI_API_KEY"]
+    for k in ["GEMINI_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY"]:
+        if k in os.environ:
+            del os.environ[k]
     if os.path.exists(API_KEY_FILE):
         try:
             os.remove(API_KEY_FILE)
@@ -73,6 +78,12 @@ async def delete_api_key():
 
 @app.post("/api/audit")
 async def api_audit(req: AuditRequest):
+    """
+    PASO 1 (FASE DE INGENIERÍA):
+    Audita el texto crudo en español mediante los 11 Agentes Especialistas.
+    Verifica cronología 24h, matemáticas de fondo, normativas API 53 / NORSOK D-010 y jerga informal.
+    Retorna el texto saneado para que el usuario pueda completar datos faltantes antes de traducir.
+    """
     raw_text = req.raw_text.strip()
     if not raw_text:
         return JSONResponse({"error": "El texto de entrada está vacío."}, status_code=400)
@@ -85,19 +96,11 @@ async def api_audit(req: AuditRequest):
     
     # 3. Maturity Score (0% to 100%)
     maturity_result = calculate_maturity_score(audit_result["corrected_spanish"])
-    
-    # 4. Standardized IADC English Translation & Agent #10 QA/QC Audit
-    effective_api_key = req.api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY")
-    english_translation, engine_source, trans_qaqc = translate_to_iadc_english(
-        audit_result["corrected_spanish"], 
-        api_key=effective_api_key, 
-        provider=req.provider or "auto",
-        well_name=req.well_name
-    )
-    
-    # Append Agent #10 Translation Findings into the Agent Findings List
-    if trans_qaqc and "findings" in trans_qaqc:
-        audit_result["agent_findings"].extend(trans_qaqc["findings"])
+
+    # 4. Pre-Flight Health Indicators
+    has_math_errors = any("ERROR MATEMÁTICO" in f.get("badge", "") for f in audit_result["agent_findings"])
+    has_blank_fields = any("PARÁMETROS EN BLANCO" in f.get("badge", "") for f in audit_result["agent_findings"])
+    has_norsok_ok = any("NORSOK" in f.get("badge", "") or "API 53" in f.get("badge", "") for f in audit_result["agent_findings"])
     
     return {
         "chronology": chrono_result,
@@ -106,6 +109,34 @@ async def api_audit(req: AuditRequest):
         "agent_findings": audit_result["agent_findings"],
         "learning_tips": audit_result["learning_tips"],
         "maturity": maturity_result,
+        "preflight": {
+            "is_24_closed": chrono_result.get("is_24_closed", False),
+            "total_duration": chrono_result.get("total_duration", 0.0),
+            "has_math_errors": has_math_errors,
+            "has_blank_fields": has_blank_fields,
+            "has_norsok_ok": has_norsok_ok
+        }
+    }
+
+@app.post("/api/translate")
+async def api_translate(req: TranslateRequest):
+    """
+    PASO 2 (FASE DE CERTIFICACIÓN IADC):
+    Toma el texto en español YA REVISADO Y COMPLETADO por el usuario en la Caja 2.
+    Ejecuta la IA seleccionada (DeepSeek, OpenAI, Claude, Groq o Gemini) con protocolo de Cero Omisión.
+    """
+    text = req.polished_spanish.strip()
+    if not text:
+        return JSONResponse({"error": "El reporte saneado para traducir está vacío."}, status_code=400)
+
+    effective_api_key = req.api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY")
+    english_translation, engine_source, trans_qaqc = translate_to_iadc_english(
+        text, 
+        api_key=effective_api_key, 
+        provider=req.provider or "auto",
+        well_name=req.well_name
+    )
+    return {
         "english_iadc": english_translation,
         "engine_source": engine_source,
         "translation_qaqc": trans_qaqc
@@ -473,6 +504,54 @@ async def index():
             margin-top: auto;
             padding-top: 4px;
         }
+
+        /* Preflight health strip */
+        .preflight-strip {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            background: #080B0F;
+            border: 1px solid var(--border);
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+        }
+        .pf-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 8px;
+            border-radius: 3px;
+            background: #121820;
+            border: 1px solid var(--border);
+            color: var(--text-muted);
+            transition: all 0.2s;
+        }
+        .pf-chip.pf-ok {
+            background: rgba(16, 185, 129, 0.12);
+            border-color: rgba(16, 185, 129, 0.4);
+            color: #34D399;
+        }
+        .pf-chip.pf-warn {
+            background: rgba(245, 158, 11, 0.12);
+            border-color: rgba(245, 158, 11, 0.4);
+            color: #FBBF24;
+        }
+        .pf-chip.pf-err {
+            background: rgba(239, 68, 68, 0.12);
+            border-color: rgba(239, 68, 68, 0.4);
+            color: #F87171;
+        }
+        @keyframes pulseTranslate {
+            0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+        .btn-pulse {
+            animation: pulseTranslate 1.8s infinite;
+        }
     </style>
 </head>
 <body>
@@ -508,7 +587,7 @@ async def index():
             <div class="progress-bar" id="maturityProgressBar"></div>
         </div>
         <div id="missingTipsText" style="font-size:0.75rem; color:var(--text-muted)">
-            Sugerencia: Ingrese el reporte y presione "Procesar & Auditar" para auditar el cumplimiento normativo según la operación.
+            Sugerencia: Ingrese el reporte y presione "⚡ 1. Auditar Reporte" para auditar cronología, cotas y normativa.
         </div>
     </div>
 
@@ -519,7 +598,7 @@ async def index():
         <div class="card">
             <div class="card-header">
                 <div class="card-title"><span>📝</span> CAJA 1: Entrada Cruda (Español)</div>
-                <button class="btn" onclick="runFullAudit()">⚡ Procesar & Auditar</button>
+                <button class="btn" id="btnAuditStage1" onclick="runStage1Audit()">⚡ 1. Auditar Reporte</button>
             </div>
             <div class="card-body">
                 <textarea id="rawTextInput" class="editor-box" placeholder="Pegue aquí el reporte o notas de campo en español..."></textarea>
@@ -530,14 +609,28 @@ async def index():
             </div>
         </div>
 
-        <!-- CAJA 2: CONTROL DE CAMBIOS & APRENDIZAJE -->
+        <!-- CAJA 2: REPORTE SANEADO & EDITOR INTERACTIVO (ESPAÑOL) -->
         <div class="card">
             <div class="card-header">
-                <div class="card-title"><span>🔍</span> CAJA 2: Control de Cambios & Aprendizaje (Diff)</div>
-                <button class="btn btn-ghost" onclick="applyCorrectionToInput()">✔️ Aplicar a Caja 1</button>
+                <div class="card-title"><span>✏️</span> CAJA 2: Reporte Saneado & Auditoría (Español)</div>
+                <div style="display:flex; gap:6px;">
+                    <button class="btn btn-ghost" id="btnToggleDiff" onclick="toggleDiffMode()" title="Alternar entre modo editor interactivo y vista comparativa diff">🔍 Ver Diff</button>
+                    <button class="btn btn-emerald" id="btnTranslateStage2" onclick="runStage2Translate()" style="font-weight:700;" title="Certificar con IADC y traducir a inglés usando la IA seleccionada">🚀 2. Traducir a Inglés IADC</button>
+                </div>
             </div>
             <div class="card-body">
-                <div id="diffViewBox" class="diff-view-box">Pegue su reporte en la Caja 1 y presione 'Procesar & Auditar' para ver el resaltado de errores en rojo y las correcciones en verde...</div>
+                <textarea id="polishedTextInput" class="editor-box" placeholder="Aquí aparecerá el reporte saneado tras presionar '⚡ 1. Auditar Reporte'. Complete los campos faltantes [___ psi, ___ bpm, etc.] directamente aquí antes de traducir..."></textarea>
+                <div id="diffViewBox" class="diff-view-box" style="display:none;">Pegue su reporte en la Caja 1 y presione '⚡ 1. Auditar Reporte' para ver el resaltado de errores en rojo y las correcciones en verde...</div>
+                
+                <!-- PREFLIGHT HEALTH BAR -->
+                <div class="preflight-strip" id="preflightStrip">
+                    <span style="font-weight:700; color:var(--text-muted); text-transform:uppercase;">Pre-Flight:</span>
+                    <span class="pf-chip" id="pfHoursChip">⏱️ Balance 24h: Pendiente</span>
+                    <span class="pf-chip" id="pfMathChip">📐 Cotas & Tally: Pendiente</span>
+                    <span class="pf-chip" id="pfNormsChip">🛡️ API 53 / NORSOK: Pendiente</span>
+                    <span class="pf-chip" id="pfBlanksChip">✍️ Campos Faltantes: Pendiente</span>
+                </div>
+
                 <ul class="tips-list" id="tipsListContainer"></ul>
             </div>
         </div>
@@ -570,16 +663,17 @@ async def index():
         <div class="card">
             <div class="card-header">
                 <div class="card-title"><span>🇬🇧</span> CAJA 4: Traducción IADC Oficial (Inglés)</div>
-                <div style="display:flex; gap:6px;">
-                    <button class="btn btn-ghost" onclick="copyEnglishTranslation()">📋 Copiar</button>
-                    <button class="btn btn-emerald" onclick="saveToGoldenMemory()">⭐ Guardar en Memoria</button>
+                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                    <button class="btn btn-ghost" onclick="copyEnglishTranslation()" title="Copiar texto en inglés">📋 Copiar</button>
+                    <button class="btn btn-ghost" onclick="copyBilingualDOR()" title="Copiar reporte bilingüe completo (Español verificado + Inglés IADC) para entrega a la operadora">📑 Copiar DOR Bilingüe</button>
+                    <button class="btn btn-emerald" onclick="saveToGoldenMemory()" title="Guardar ejemplo en memoria de aprendizaje">⭐ Guardar en Memoria</button>
                 </div>
             </div>
             <div class="card-body">
-                <div id="englishOutputBox" class="english-box">Aquí se generará el texto oficial en inglés técnico petrolero estandarizado...</div>
+                <div id="englishOutputBox" class="english-box">Aquí se generará el texto oficial en inglés técnico petrolero estandarizado tras completar el Paso 2...</div>
                 <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.75rem; color:var(--text-muted); margin-top:6px; flex-wrap:wrap; gap:8px;">
                     <div>
-                        <span>⚡ Motor: <b id="translationEngineBadge" style="color:var(--amber)">Motor Especializado Offline IADC</b></span>
+                        <span>⚡ Motor: <b id="translationEngineBadge" style="color:var(--amber)">En espera del Paso 2</b></span>
                         <span id="translationAuditBadge" class="badge badge-emerald" style="display:none; margin-left:8px;">🛡️ IADC Certified</span>
                         <span id="dataParityBadge" class="badge badge-cyan" style="display:none; margin-left:6px;">⚖️ Paridad 100%</span>
                     </div>
@@ -723,25 +817,28 @@ async def index():
                 const res = await fetch('/api/sample');
                 const data = await res.json();
                 document.getElementById('rawTextInput').value = data.sample_text;
-                runFullAudit();
+                runStage1Audit();
             } catch (err) {
                 alert('Error al cargar datos de ejemplo.');
             }
         }
 
-        async function runFullAudit() {
+        /* FASE 1: AUDITORÍA TÉCNICA Y SANEAMIENTO EN ESPAÑOL */
+        async function runStage1Audit() {
             const rawText = document.getElementById('rawTextInput').value.trim();
             const wellName = document.getElementById('wellNameInput').value.trim();
+            const btnAudit = document.getElementById('btnAuditStage1');
+            const btnTranslate = document.getElementById('btnTranslateStage2');
+
             if (!rawText) {
                 alert('Por favor ingrese o pegue texto en la Caja 1.');
                 return;
             }
 
-            const clientKey = getClientApiKey();
-            const clientProvider = getClientProvider();
-
-            document.getElementById('diffViewBox').innerHTML = 'Auditando y analizando reporte...';
-            document.getElementById('englishOutputBox').innerText = 'Generando traducción técnica IADC con IA...';
+            if (btnAudit) {
+                btnAudit.disabled = true;
+                btnAudit.innerText = '⏳ Auditando...';
+            }
 
             try {
                 const response = await fetch('/api/audit', {
@@ -749,13 +846,11 @@ async def index():
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         raw_text: rawText,
-                        well_name: wellName,
-                        api_key: clientKey,
-                        provider: clientProvider
+                        well_name: wellName
                     })
                 });
 
-                if (!response.ok) throw new Error('Error en el servidor.');
+                if (!response.ok) throw new Error('Error en el servidor al auditar.');
                 const data = await response.json();
                 latestAuditData = data;
 
@@ -772,8 +867,18 @@ async def index():
                     document.getElementById('gapNoticeText').innerText = '⚠️ Diferencia de ' + data.chronology.variance_hours + ' h';
                 }
 
-                // 2. Visual Diff & Tips (Caja 2)
-                document.getElementById('diffViewBox').innerHTML = data.visual_diff_html;
+                // 2. Populate Caja 2 (Editor interactivo y Diff)
+                const editor = document.getElementById('polishedTextInput');
+                const diffBox = document.getElementById('diffViewBox');
+                editor.value = data.corrected_spanish;
+                diffBox.innerHTML = data.visual_diff_html;
+
+                // Reset to editor view if in diff
+                if (isDiffMode) {
+                    toggleDiffMode();
+                }
+
+                // Tips
                 const tipsContainer = document.getElementById('tipsListContainer');
                 tipsContainer.innerHTML = '';
                 data.learning_tips.forEach(tip => {
@@ -782,6 +887,53 @@ async def index():
                     li.innerText = tip;
                     tipsContainer.appendChild(li);
                 });
+
+                // Pre-Flight Health Bar Chips
+                const pf = data.preflight || {};
+                const pfHours = document.getElementById('pfHoursChip');
+                const pfMath = document.getElementById('pfMathChip');
+                const pfNorms = document.getElementById('pfNormsChip');
+                const pfBlanks = document.getElementById('pfBlanksChip');
+
+                if (pfHours) {
+                    if (pf.is_24_closed) {
+                        pfHours.className = 'pf-chip pf-ok';
+                        pfHours.innerText = '⏱️ 24h: Cerrado (24.0h)';
+                    } else {
+                        pfHours.className = 'pf-chip pf-warn';
+                        pfHours.innerText = `⏱️ 24h: Diferencia ${data.chronology.variance_hours}h`;
+                    }
+                }
+
+                if (pfMath) {
+                    if (pf.has_math_errors) {
+                        pfMath.className = 'pf-chip pf-err';
+                        pfMath.innerText = '📐 Cotas: Inconsistencia';
+                    } else {
+                        pfMath.className = 'pf-chip pf-ok';
+                        pfMath.innerText = '📐 Cotas & Tally: OK';
+                    }
+                }
+
+                if (pfNorms) {
+                    if (pf.has_norsok_ok) {
+                        pfNorms.className = 'pf-chip pf-ok';
+                        pfNorms.innerText = '🛡️ API 53 / NORSOK: OK';
+                    } else {
+                        pfNorms.className = 'pf-chip pf-warn';
+                        pfNorms.innerText = '🛡️ Normas: Verificadas';
+                    }
+                }
+
+                if (pfBlanks) {
+                    if (pf.has_blank_fields) {
+                        pfBlanks.className = 'pf-chip pf-warn';
+                        pfBlanks.innerText = '✍️ Campos Faltantes: Completar en Caja 2';
+                    } else {
+                        pfBlanks.className = 'pf-chip pf-ok';
+                        pfBlanks.innerText = '✍️ Parámetros: Completos';
+                    }
+                }
 
                 // 3. QA/QC Findings (Caja 3)
                 const findingsContainer = document.getElementById('findingsListContainer');
@@ -804,13 +956,88 @@ async def index():
                 document.getElementById('missingTipsText').innerText = mat.missing_for_next_level.length > 0 ?
                     'Sugerencia: Falta ' + mat.missing_for_next_level.join(', ') : '¡Nivel Élite alcanzado!';
 
-                // 5. English Translation (Caja 4)
-                document.getElementById('englishOutputBox').innerText = data.english_iadc;
+                // Pulse button for stage 2 to guide user!
+                if (btnTranslate) {
+                    btnTranslate.classList.add('btn-pulse');
+                }
+
+            } catch (err) {
+                alert('Error al auditar el reporte: ' + err.message);
+            } finally {
+                if (btnAudit) {
+                    btnAudit.disabled = false;
+                    btnAudit.innerText = '⚡ 1. Auditar Reporte';
+                }
+            }
+        }
+
+        /* TOGGLE DIFF VIEW <-> INTERACTIVE EDITOR (CAJA 2) */
+        function toggleDiffMode() {
+            const editor = document.getElementById('polishedTextInput');
+            const diffBox = document.getElementById('diffViewBox');
+            const toggleBtn = document.getElementById('btnToggleDiff');
+
+            if (!isDiffMode) {
+                // Show Diff
+                editor.style.display = 'none';
+                diffBox.style.display = 'block';
+                toggleBtn.innerText = '✏️ Modo Editor';
+                isDiffMode = true;
+            } else {
+                // Show Editor
+                editor.style.display = 'block';
+                diffBox.style.display = 'none';
+                toggleBtn.innerText = '🔍 Ver Diff';
+                isDiffMode = false;
+            }
+        }
+
+        /* FASE 2: CERTIFICACIÓN IADC Y TRADUCCIÓN A INGLÉS OFICIAL */
+        async function runStage2Translate() {
+            const editor = document.getElementById('polishedTextInput');
+            const textToTranslate = editor.value.trim();
+            const wellName = document.getElementById('wellNameInput').value.trim();
+            const btnTranslate = document.getElementById('btnTranslateStage2');
+
+            if (!textToTranslate) {
+                alert('Por favor ejecute primero el Paso 1 (Auditar Reporte) o ingrese el texto saneado en la Caja 2.');
+                return;
+            }
+
+            if (btnTranslate) {
+                btnTranslate.disabled = true;
+                btnTranslate.classList.remove('btn-pulse');
+                btnTranslate.innerText = '⏳ Traduciendo...';
+            }
+
+            const clientKey = getClientApiKey();
+            const clientProvider = getClientProvider();
+            const outBox = document.getElementById('englishOutputBox');
+            outBox.innerText = '⏳ Conectando con IA seleccionada para Certificación IADC (Traducción 1:1 sin omisiones)...';
+
+            try {
+                const response = await fetch('/api/translate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        polished_spanish: textToTranslate,
+                        well_name: wellName,
+                        api_key: clientKey,
+                        provider: clientProvider
+                    })
+                });
+
+                if (!response.ok) throw new Error('Error en el servidor al traducir.');
+                const data = await response.json();
+
+                outBox.innerText = data.english_iadc;
+
                 if (data.engine_source) {
                     const engineBadge = document.getElementById('translationEngineBadge');
                     engineBadge.innerText = data.engine_source;
-                    engineBadge.style.color = data.engine_source.includes('Gemini') ? 'var(--emerald)' : 'var(--amber)';
+                    engineBadge.style.color = data.engine_source.includes('Offline') ? 'var(--amber)' : 'var(--emerald)';
                 }
+
                 if (data.translation_qaqc) {
                     const auditBadge = document.getElementById('translationAuditBadge');
                     auditBadge.style.display = 'inline-block';
@@ -829,34 +1056,89 @@ async def index():
                         parityBadge.className = pPct >= 80 ? 'badge badge-cyan' : 'badge badge-amber';
                         parityBadge.innerText = '⚖️ Paridad 1:1 (' + pPct + '%)';
                     }
+
+                    // Append translation findings to Caja 3 if present
+                    if (data.translation_qaqc.findings && data.translation_qaqc.findings.length > 0) {
+                        const findingsContainer = document.getElementById('findingsListContainer');
+                        data.translation_qaqc.findings.forEach(f => {
+                            const card = document.createElement('div');
+                            card.className = 'finding-card';
+                            card.innerHTML = `<div style="font-weight:700; margin-bottom:4px">${f.badge} <span style="color:var(--text-muted); font-size:0.7rem">(${f.agent})</span></div><div>${f.message}</div>`;
+                            findingsContainer.prepend(card);
+                        });
+                        const countBadge = document.getElementById('findingsCountBadge');
+                        const curCount = parseInt(countBadge.innerText) || 0;
+                        countBadge.innerText = (curCount + data.translation_qaqc.findings.length) + ' Alertas';
+                    }
                 }
 
             } catch (err) {
-                alert('Error al procesar el reporte: ' + err.message);
-            }
-        }
-
-        function applyCorrectionToInput() {
-            if (latestAuditData && latestAuditData.corrected_spanish) {
-                document.getElementById('rawTextInput').value = latestAuditData.corrected_spanish;
-                alert('Correcciones técnicas aplicadas a la Caja 1.');
-                runFullAudit();
-            } else {
-                alert('Primero debe presionar Procesar & Auditar.');
+                alert('Error en traducción IADC: ' + err.message);
+                outBox.innerText = '❌ Error al traducir. Revise su conexión o su clave de API.';
+            } finally {
+                if (btnTranslate) {
+                    btnTranslate.disabled = false;
+                    btnTranslate.innerText = '🚀 2. Traducir a Inglés IADC';
+                }
             }
         }
 
         function copyEnglishTranslation() {
             const txt = document.getElementById('englishOutputBox').innerText;
-            if (txt && !txt.startsWith('Aquí se')) {
+            if (txt && !txt.startsWith('Aquí se') && !txt.startsWith('⏳')) {
                 navigator.clipboard.writeText(txt);
-                alert('¡Traducción IADC copiada al portapapeles!');
+                const notice = document.getElementById('copyConfirmNotice');
+                if (notice) {
+                    notice.innerText = '✅ ¡Traducción IADC copiada!';
+                    setTimeout(() => { notice.innerText = ''; }, 3000);
+                } else {
+                    alert('¡Traducción IADC copiada al portapapeles!');
+                }
+            }
+        }
+
+        function copyBilingualDOR() {
+            const wellName = document.getElementById('wellNameInput').value.trim() || 'Well';
+            const spanish = document.getElementById('polishedTextInput').value.trim();
+            const english = document.getElementById('englishOutputBox').innerText.trim();
+
+            if (!spanish) {
+                alert('Debe procesar al menos el reporte en español.');
+                return;
+            }
+
+            const bilingualDOR = 
+`================================================================================
+RIGMIND | DAILY OPERATIONS REPORT (DOR) / REPORTE DIARIO DE OPERACIONES
+POZO / WELL: ${wellName}
+================================================================================
+
+--- REPORTE SANEADO Y AUDITADO (ESPAÑOL) ---
+${spanish}
+
+--- OFFICIAL IADC/SPE TECHNICAL REPORT (ENGLISH) ---
+${english || '[Traducción pendiente - Ejecutar Paso 2]'}
+
+================================================================================
+RigMind Well Interventions & QA/QC Suite | API 53 - NORSOK D-010 - IADC Certified
+Smart Resources - https://rigmind.smartresources.com.co
+================================================================================`;
+
+            navigator.clipboard.writeText(bilingualDOR);
+            const notice = document.getElementById('copyConfirmNotice');
+            if (notice) {
+                notice.innerText = '✅ ¡DOR Bilingüe Oficial copiado!';
+                setTimeout(() => { notice.innerText = ''; }, 3500);
+            } else {
+                alert('¡DOR Bilingüe Oficial copiado al portapapeles!');
             }
         }
 
         async function saveToGoldenMemory() {
-            if (!latestAuditData) {
-                alert('Primero procese un reporte.');
+            const spanish = document.getElementById('polishedTextInput').value.trim();
+            const english = document.getElementById('englishOutputBox').innerText.trim();
+            if (!spanish) {
+                alert('Primero procese y audite un reporte.');
                 return;
             }
             const opName = prompt('Ingrese el nombre de la operación para esta memoria (ej. Asentamiento Bridge Plug 7"):', 'Operación Estándar');
@@ -865,9 +1147,9 @@ async def index():
             const payload = {
                 category: 'well_intervention',
                 operation: opName,
-                spanish_exemplar: latestAuditData.corrected_spanish,
-                english_iadc: latestAuditData.english_iadc,
-                learning_tip: latestAuditData.learning_tips.join(' | ')
+                spanish_exemplar: spanish,
+                english_iadc: english,
+                learning_tip: latestAuditData && latestAuditData.learning_tips ? latestAuditData.learning_tips.join(' | ') : 'Reporte estandarizado'
             };
 
             const res = await fetch('/api/memory/save', {
