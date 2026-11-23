@@ -1,0 +1,28 @@
+{
+  "Yopo-1": {
+    "field": "Yopo Field",
+    "basin": "Llanos Basin, Colombia",
+    "operator": "Sabana Resources",
+    "contractor": "TSW",
+    "rig": "ERR TSW-01",
+    "operation_type": "Permanent Plug & Abandonment (P&A)",
+    "casing_string": "Casing 7\" 26# L-80 EUE",
+    "casing_drift_id": 6.151,
+    "bop_rating": "7-1/16\" 5,000 psi (5K)",
+    "production_tubing": "3-1/2\" 9.3# N-80 EUE",
+    "pbtd": 5720.0
+  },
+  "Yopo-3": {
+    "field": "Yopo Field",
+    "basin": "Llanos Basin, Colombia",
+    "operator": "Sabana Resources",
+    "contractor": "TSW",
+    "rig": "ERR TSW-01",
+    "operation_type": "Permanent Plug & Abandonment (P&A)",
+    "casing_string": "Casing 7\" 26# L-80 EUE",
+    "casing_drift_id": 6.151,
+    "bop_rating": "7-1/16\" 5,000 psi (5K)",
+    "production_tubing": "3-1/2\" 9.3# N-80 EUE",
+    "pbtd": 6050.0
+  }
+}

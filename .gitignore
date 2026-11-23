@@ -1,0 +1,14 @@
+# Sensitive API keys & credentials
+data/.api_key
+.env
+*.env
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Operating system files
+.DS_Store
+Thumbs.db

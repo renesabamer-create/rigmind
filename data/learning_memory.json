@@ -1,0 +1,29 @@
+[
+  {
+    "id": "gold-001",
+    "category": "tubulars",
+    "operation": "RIH Production Tubing",
+    "maturity_level": "Elite (100%)",
+    "spanish_exemplar": "RIH sarta de producción con tubería de 3-1/2\" EU 9.3 lb/ft, Grado L-80, Rango 2, conexiones EUE 8RD caja x pin, en sencillos a rack desde 3,015 ft hasta 5,720 ft MD. Velocidad promedio 10 jts/hr (313 ft/hr). Pesos registrados: PUW 45.0 klb, SOW 39.5 klb, ROTW 42.0 klb, arrastre 3.0 klb.",
+    "english_iadc": "RIH 3-1/2\" 9.3# L-80 EUE Range 2 Box x Pin production tubing singles from pipe racks from 3,015 ft to 5,720 ft MD. Average running speed: 10 jts/hr (313 ft/hr). Recorded string weights: PUW 45.0 klb, SOW 39.5 klb, ROTW 42.0 klb, up-hole drag 3.0 klb.",
+    "learning_tip": "Incluir siempre: OD (3-1/2\"), Peso (9.3#), Grado (L-80), Rosca (EUE), Rango (R2), velocidades (ft/hr) y desglose de pesos (PUW/SOW/drag)."
+  },
+  {
+    "id": "gold-002",
+    "category": "cementing",
+    "operation": "Balanced Cement Plug",
+    "maturity_level": "Elite (100%)",
+    "spanish_exemplar": "Mezcló y balanceó tapón de cemento de fondo #1 desde 5,720 ft hasta 5,331 ft MD (389 ft de espesor). Bombeó 5 bbl de preflujo de agua fresca a 3 bpm / 50 psi. Bombeó 16 bbl de lechada de cemento Holcim Clase G a 15.8 ppg (78 sx, rendimiento 1.15 cu.ft/sk) a 3 bpm con 80 psi. Desplazó con 3.8 bbl a 3 bpm y 32.2 bbl a 2 bpm con 200 psi. Se observó succión de retorno al parar bombas. Tomó 3 testigos de superficie. Inició WOC.",
+    "english_iadc": "Spotted balanced bottom cement plug #1 from 5,720 ft to 5,331 ft MD (389 ft thickness). Pumped 5 bbl fresh water pre-flush @ 3 bpm / 50 psi. Mixed and pumped 16 bbl Class G neat cement slurry @ 15.8 ppg (78 sx, yield 1.15 cu.ft/sk) @ 3 bpm / 80 psi. Displaced w/ 3.8 bbl @ 3 bpm and 32.2 bbl @ 2 bpm / 200 psi fresh water. Backflow suction observed at pump shutdown. Caught 3 surface witness samples. Commenced WOC.",
+    "learning_tip": "Verificar siempre que el espesor coincida con la resta (5720 - 5331 = 389 ft). Registrar sacos, densidad (15.8 ppg), presiones, tasas y desplazamiento equilibrado."
+  },
+  {
+    "id": "gold-003",
+    "category": "bridge_plug",
+    "operation": "Setting Hydro-Mechanical Bridge Plug",
+    "maturity_level": "Elite (100%)",
+    "spanish_exemplar": "Asentó Hydro-Mechanical Bridge Plug (HMBP) de 7\" @ 5,720 ft MD. Lanzó esfera de 1.25\". Presurizó en escalones: 500 psi / 2 min, 1000 psi / 2 min, 1500 psi / 2 min, 2500 psi / 2 min, cortó pin a 3,200 psi con caída a 0 psi. Verificó anclaje con 40 klb de sobretensión (86 klb totales) x 5 min. Bajó sarta y aplicó 7 klb de compresión. Liberó herramienta con 10 vueltas a la derecha bajo 48 klb de tensión. Probó integridad del tapón con 500 psi x 15 min con bomba de cementación (OK).",
+    "english_iadc": "Set 7\" Hydro-Mechanical Bridge Plug (HMBP) @ 5,720 ft MD. Dropped 1.25\" ball. Stepped pressure: 500 psi / 2 min, 1000 psi / 2 min, 1500 psi / 2 min, 2500 psi / 2 min, sheared ball seat @ 3,200 psi w/ pressure drop to 0 psi. Verified anchor w/ 40 klb overpull (86 klb total tension) x 5 min. Slacked off 7 klb on plug. Released setting tool w/ 10 RH turns under 48 klb tension. Pressure tested HMBP to 500 psi x 15 min w/ cementing unit (OK).",
+    "learning_tip": "Documentar los escalones de presión, la presión de corte, la sobretensión de prueba (overpull) y la rotación de liberación a la derecha."
+  }
+]
