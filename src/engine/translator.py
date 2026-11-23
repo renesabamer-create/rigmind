@@ -516,6 +516,35 @@ def detect_llm_provider(api_key: str, requested_provider: str = "auto") -> str:
     return "gemini"
 
 
+def call_deepseek_translation(text: str, api_key: str, well_name: str = "Well", model: str = "deepseek-chat") -> str:
+    """
+    Translates using DeepSeek (DeepSeek-V3 / deepseek-chat).
+    OpenAI-compatible endpoint, high intelligence, extremely cost-effective (~$0.14/1M tokens).
+    """
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key.strip()}"
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": ELITE_IADC_SYSTEM_PROMPT},
+            {"role": "user", "content": f"Translate these Spanish operational notes for Well '{well_name}':\n\n{text}"}
+        ],
+        "temperature": 0.05,
+        "max_tokens": 4096
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers)
+    with urllib.request.urlopen(req, timeout=35) as response:
+        result = json.loads(response.read().decode("utf-8"))
+        choices = result.get("choices", [])
+        if choices:
+            return choices[0].get("message", {}).get("content", "").strip()
+    raise ValueError("DeepSeek returned an empty response")
+
+
 def call_openai_translation(text: str, api_key: str, well_name: str = "Well", model: str = "gpt-4o-mini") -> str:
     """
     Translates using OpenAI (GPT-4o-mini or GPT-4o) with strict 1:1 zero-omission directives.
@@ -664,8 +693,17 @@ def translate_to_iadc_english(
     if not force_offline and effective_key:
         error_reasons = []
 
-        # 1. OpenAI Path (Gold standard)
-        if selected_provider == "openai" or (selected_provider == "auto" and effective_key.startswith("sk-")):
+        # 1. DeepSeek Path (State-of-the-art reasoning, ultra cost-effective)
+        if selected_provider == "deepseek":
+            try:
+                translated = call_deepseek_translation(spanish_text, effective_key, well_name=well_name, model="deepseek-chat")
+                qaqc_result = audit_translation_qaqc(translated, spanish_text)
+                return translated, "DeepSeek (V3 / deepseek-chat)", qaqc_result
+            except Exception as e:
+                error_reasons.append(f"DeepSeek error: {str(e)[:80]}")
+
+        # 2. OpenAI Path (Gold standard)
+        elif selected_provider == "openai" or (selected_provider == "auto" and effective_key.startswith("sk-") and not effective_key.startswith("sk-ant-")):
             try:
                 translated = call_openai_translation(spanish_text, effective_key, well_name=well_name, model="gpt-4o-mini")
                 qaqc_result = audit_translation_qaqc(translated, spanish_text)
@@ -673,7 +711,7 @@ def translate_to_iadc_english(
             except Exception as e:
                 error_reasons.append(f"OpenAI error: {str(e)[:80]}")
 
-        # 2. Anthropic Claude Path
+        # 3. Anthropic Claude Path
         elif selected_provider == "anthropic" or effective_key.startswith("sk-ant-"):
             try:
                 translated = call_anthropic_translation(spanish_text, effective_key, well_name=well_name, model="claude-3-5-haiku-20241022")
@@ -682,7 +720,7 @@ def translate_to_iadc_english(
             except Exception as e:
                 error_reasons.append(f"Anthropic error: {str(e)[:80]}")
 
-        # 3. Groq Path (Llama 3.3 70B)
+        # 4. Groq Path (Llama 3.3 70B)
         elif selected_provider == "groq" or effective_key.startswith("gsk_"):
             try:
                 translated = call_groq_translation(spanish_text, effective_key, well_name=well_name, model="llama-3.3-70b-versatile")
@@ -691,7 +729,7 @@ def translate_to_iadc_english(
             except Exception as e:
                 error_reasons.append(f"Groq error: {str(e)[:80]}")
 
-        # 4. Google Gemini Path
+        # 5. Google Gemini Path
         else:
             try:
                 translated, engine_label = call_gemini_translation(spanish_text, effective_key, well_name=well_name)

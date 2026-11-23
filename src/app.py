@@ -87,7 +87,7 @@ async def api_audit(req: AuditRequest):
     maturity_result = calculate_maturity_score(audit_result["corrected_spanish"])
     
     # 4. Standardized IADC English Translation & Agent #10 QA/QC Audit
-    effective_api_key = req.api_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY")
+    effective_api_key = req.api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY")
     english_translation, engine_source, trans_qaqc = translate_to_iadc_english(
         audit_result["corrected_spanish"], 
         api_key=effective_api_key, 
@@ -622,7 +622,10 @@ async def index():
                 let providerLabel = 'OpenAI (GPT-4o)';
                 let badgeClass = 'badge badge-emerald';
 
-                if (detected === 'openai') {
+                if (detected === 'deepseek') {
+                    providerLabel = '🐳 DeepSeek (V3)';
+                    badgeClass = 'badge badge-cyan';
+                } else if (detected === 'openai') {
                     providerLabel = '🟢 OpenAI (GPT-4o)';
                 } else if (detected === 'anthropic') {
                     providerLabel = '🟣 Claude 3.5';
@@ -655,6 +658,7 @@ async def index():
                     <div style="display:inline-flex; align-items:center; gap:6px; background:#0E131A; border:1px solid var(--border); padding:3px 8px; border-radius:4px;" title="Seleccione proveedor y pegue su API Key (OpenAI, Anthropic Claude, Groq o Gemini).">
                         <select id="providerSelect" class="meta-input" style="padding:2px 4px; font-size:0.75rem; background:#080B0F; border:1px solid #232E3E; color:var(--text-main); border-radius:3px;">
                             <option value="auto">🤖 Auto-Detectar</option>
+                            <option value="deepseek">🐳 DeepSeek (V3 / R1)</option>
                             <option value="openai">🟢 OpenAI (GPT-4o)</option>
                             <option value="anthropic">🟣 Claude 3.5</option>
                             <option value="groq">⚡ Groq (Llama 3.3)</option>
