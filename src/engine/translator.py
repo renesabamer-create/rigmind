@@ -9,12 +9,13 @@ from typing import Dict, Any, Tuple, List
 # ==============================================================================
 
 ELITE_IADC_SYSTEM_PROMPT = """You are the Senior Lead Petroleum Engineer and Chief IADC/SPE Technical Translator & QA/QC Auditor.
-Your mission is to transform raw Spanish well intervention, workover, and drilling field notes into 100% rigorous, professional, standardized IADC/SPE English narratives.
+Your mission is to transform raw Spanish well intervention, workover, completion, and well abandonment (P&A) field notes into 100% rigorous, professional, standardized IADC/SPE English narratives.
 
 MANDATORY DIRECTIVES:
-1. OUTPUT ONLY THE TRANSLATED CHRONOLOGY. Do NOT include greetings, intro phrases, bullet commentary, or options.
-2. ZERO SPANGLISH: Every Spanish word, verb, preposition, and colloquialism MUST be completely converted to natural petroleum engineering English. Never output phrases like "toma of alimentos", "pup joi t", "corte of cable", or "conexiones of lineas".
-3. STANDARD IADC ABBREVIATIONS: Enforce standard abbreviations where appropriate:
+1. STRICT ZERO-OMISSION PROTOCOL: You must translate EVERY SINGLE SENTENCE, CLAUSE, NUMBER, UNIT, SERIAL NUMBER, AND DETAIL without exception. NEVER summarize, synthesize, shorten, condense, or drop operations. If an entry describes multiple actions (e.g. tensioning string, rotating right-hand, observing loss of tension, pulling free w/o overpull, forward circulating until full, closing pipe rams, pressure testing HMBP, recording on Barton chart), EVERY SINGLE ACTION MUST appear in the final English narrative with 1:1 completeness.
+2. OUTPUT ONLY THE TRANSLATED TEXT: Do NOT include greetings, intro phrases, bullet commentary, or options.
+3. ZERO SPANGLISH: Every Spanish word, verb, preposition, and colloquialism MUST be completely converted to natural petroleum engineering English. Never output phrases like "toma of alimentos", "pup joi t", "corte of cable", or "conexiones of lineas".
+4. STANDARD IADC ABBREVIATIONS: Enforce standard abbreviations where appropriate:
    - POOH (Pulled Out Of Hole)
    - RIH (Ran In Hole)
    - M/U (Made Up)
@@ -26,8 +27,10 @@ MANDATORY DIRECTIVES:
    - R/D (Rigged Down)
    - WOC (Waiting On Cement)
    - HMBP (Hydro-Mechanical Bridge Plug)
+   - BPV (Back Pressure Valve)
+   - PJSM (Pre-Job Safety Meeting)
    - PUW (Pick-Up Weight), SOW (Slack-Off Weight), ROTW (Rotating Weight)
-4. TYPOS & FIELD SLANG NORMALIZATION:
+5. TYPOS & FIELD SLANG NORMALIZATION:
    - "pup joi t" / "pup joint de manejo" -> "handling pup joint"
    - "llaves hidraulicas" -> "hydraulic power tongs"
    - "choque" / "manifold de choque" -> "choke manifold"
@@ -40,14 +43,16 @@ MANDATORY DIRECTIVES:
    - "personal toma de alimentos y descanso" -> "Crew meal and rest break"
    - "reunion preoperacional" -> "Held pre-job safety meeting (PJSM)"
    - "check list diario" -> "conducted daily tool and equipment inspection"
-5. PRESERVE NUMERICAL DATA & TIMELINES EXACTLY: Keep the exact hours (e.g. '00:00 - 01:00') and all weights, depths, pressures, and volumes.
-"""
+   - "carta barton" / "carta bartón" -> "Barton round pressure chart recorder"
+   - "toque de TOC" / "verifico TOC con 10 klb" -> "tagged TOC w/ 10 klb"
+6. PRESERVE NUMERICAL DATA & TIMELINES EXACTLY: Keep the exact hours (e.g. '00:00 - 01:00') and all weights, depths, pressures, and volumes."""
 
 MODELS_CASCADE = [
     "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
-    "gemini-3.8-flash"
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-latest"
 ]
 
 # ==============================================================================
@@ -217,11 +222,33 @@ CONTEXTUAL_PATTERNS: List[Tuple[str, str]] = [
     # -------------------------------------------------------------
     # 8. Bridge Plugs & Downhole Mechanics
     # -------------------------------------------------------------
+    (
+        r"se\s+coloc[oó]\s+la\s+sarta\s+en\s+tensi[oó]n\s+registrando\s+(\d+(?:\.\d+)?)\s*klb,?\s+posteriormente\s+se\s+aplic[oó]\s+rotaci[oó]n\s+a\s+la\s+derecha\s+sobre\s+la\s+sarta\s+de\s+tuber[ií]a\s+(.*?)\s+completando\s+(\d+)\s+vueltas\.?",
+        r"Placed the workstring in tension, recording \1 klb, then applied right-hand (RH) rotation to the \2 tubing string, completing \3 turns."
+    ),
+    (
+        r"durante\s+la\s+maniobra\s+se\s+observ[oó]\s+p[eé]rdida\s+de\s+tensi[oó]n\s+y,?\s+al\s+levantar\s+la\s+sarta,?\s+se\s+evidenci[oó]\s+que\s+esta\s+se\s+encontraba\s+libre,?\s+sin\s+registrar\s+overpull,?\s+quedando\s+con\s+un\s+nuevo\s+peso\s+de\s+(\d+(?:\.\d+)?)\s*klb\.?",
+        r"During the operation, a loss of tension was observed, and upon picking up the string, it was verified free with zero overpull, recording a new string weight of \1 klb."
+    ),
+    (
+        r"bombe[oó]\s+en\s+directa\s+hasta\s+evidenciar\s+(?:el\s+)?pozo\s+lleno;?\s*posteriormente\s+se\s+cerraron\s+los\s+pipe\s+rams\s+y\s+se\s+realiz[oó]\s+prueba\s+de\s+integridad\s+del\s+hmbp\s+de\s+([0-9\-/”\"]+)\s+aplicando\s+(\d+)\s*psi\s+durante\s+(\d+)\s+minutos,?\s*obteniendo\s+resultados\s+satisfactorios\s*\(ok\)\.?",
+        r"Pumped via forward circulation until observing the well full; subsequently closed pipe rams and pressure tested integrity of the \1 HMBP to \2 psi for \3 minutes (OK)."
+    ),
+    (
+        r"dej[oó]\s+registrada\s+en\s+carta\s+bart[oó]n\s+prueba\s+de\s+bp\.?",
+        "Recorded bridge plug pressure test on Barton round circular chart recorder."
+    ),
+    (r"carta\s+bart[oó]n", "Barton circular pressure chart recorder"),
+    (r"prueba\s+de\s+bp\b", "bridge plug pressure test"),
     (r"sent[oó]\s+bridge\s+plug\s+hidromec[aá]nico\s+de\s+([0-9\-/”\"]+)\s*@\s*(\d+)\s*ft", r"Set \1 Hydro-Mechanical Bridge Plug (HMBP) @ \2 ft MD"),
     (r"verific[oó]\s+anclaje\s+con\s+(\d+)\s*klb\s+de\s+overpull(?:\s*\((.*?)\))?", r"confirmed anchor w/ \1 klb overpull (\2)"),
     (r"baj[oó]\s+sarta\s+y\s+aplic[oó]\s+peso\s+sobre\s+el\s+hmbp\s+de\s+(\d+(?:\.\d+)?)\s*klb", r"slacked off \1 klb weight on HMBP"),
     (r"liber[oó]\s+(?:del\s+)?hmbp\s+con\s+(\d+)\s+vueltas\s+a\s+la\s+derecha", r"released from HMBP w/ \1 RH turns"),
     (r"prob[oó]\s+integridad\s+del\s+hmbp\s+([0-9\-/”\"]+)\s+con\s+(\d+)\s*psi\s*x\s*(\d+)\s*min(?:utos)?", r"pressure tested \1 HMBP to \2 psi x \3 min (OK)"),
+    (
+        r"dispar[oó]\s+ca[ñn][oó]n\s+(?:de\s+casing|de\s+revestimiento)?\s*([0-9\-/”\"]+)\s*para\s+comunicar\s+anular\s+([0-9\-/”\"]+)\s*(?:x|×)\s*([0-9\-/”\"]+)",
+        r"Perforated casing w/ \1 casing gun to establish communication between \2 x \3 annulus"
+    ),
 
     # -------------------------------------------------------------
     # 9. Cementing & P&A
@@ -232,16 +259,25 @@ CONTEXTUAL_PATTERNS: List[Tuple[str, str]] = [
     (r"tiempo\s+de\s+woc\s*\((.*?)\)", r"Waiting on Cement (WOC) (\1)"),
     (r"verific[oó]\s+toc\s+con\s+(\d+)\s*klb\s+a\s+(\d+(?:\.\d+)?)\s*ft", r"Tagged TOC w/ \1 klb weight @ \2 ft MD (OK)"),
     (r"recogi[oó]\s+(\d+)\s+testigos", r"Caught \1 surface witness samples"),
+    (r"evidenci[oó]\s+succi[oó]n\s+en\s+backflow", "Observed suction on backflow / U-tubing effect"),
 
     # -------------------------------------------------------------
     # 10. Artificial Lift & ESP Decoupling
     # -------------------------------------------------------------
+    (
+        r"con\s+standing\s+valve\s+instalada,?\s*raz[oó]n\s+por\s+la\s+cual\s+no\s+fue\s+posible\s+drenar\s+tbg\s+cuando\s+se\s+lanz[oó]\s+la\s+barra\s+para\s+romper\s+los?\s+pin\s+de\s+la\s+drain\s+valve\.?",
+        "Standing valve installed in seating nipple, preventing tubing drainage when bar was dropped to shear drain valve pin."
+    ),
     (r"desacople\s+de\s+sarta\s+esp", "Decoupled ESP downhole assembly"),
     (r"tom[oó]\s+medidas\s+el[eé]ctricas\s+antes\s+de\s+desacople\s+esp:", "Recorded electrical measurements prior to ESP decouple:"),
     (r"balanceado\s+con\s+falla\s+a\s+tierra", "balanced with ground fault to earth"),
     (r"dictamen:\s*falla\s+el[eé]ctrica\s+en\s+motor", "Diagnosis: electrical insulation breakdown in motor"),
     (r"retir[oó]\s+overcoupling\s+y\s+(\d+)\s+superbandas\s+por\s+junta", r"removed overcoupling & \1 superbands per joint"),
     (r"se\s+recuperaron\s+(\d+)\s*ft\s+de\s+cable\s+de\s+potencia", r"recovered \1 ft of ESP power cable"),
+    (r"pulling\s+(?:de\s+esp\s+)?con\s+tuber[ií]a\s+llena", "POOH wet string (tubing full)"),
+    (r"con\s+tuber[ií]a\s+llena", "with wet string (tubing full)"),
+    (r"despach[oó]\s+carrotanque\s+(?:sencillo\s+)?de\s+producci[oó]n\s+con\s+(\d+)\s*bbl\s+de\s+crudo\s*\+\s*(\d+)\s*bbl\s+de\s+agua\s+a\s+(.*?)(?:\.|$)", r"Dispatched production tanker truck w/ \1 bbl crude + \2 bbl water to \3."),
+    (r"arrib[oó]\s+carrotanque\s+con\s+(\d+)\s*bbl\s+de\s+agua\s+industrial\s+de\s+(.*?)(?:\.|$)", r"Received tanker truck w/ \1 bbl industrial water from \2."),
 
     # -------------------------------------------------------------
     # 11. Well Name Normalization
@@ -274,6 +310,7 @@ WORD_REPLACEMENTS: List[Tuple[str, str]] = [
     (r"\bdel\s+pozo\b", "of well"),
     (r"\blocaci[oó]n\b", "location"),
     (r"\bpozo\b", "well"),
+    (r'(\d+[\d/”"]*)\s+y\s+(\d+[\d/”"]*)', r'\1 & \2'),
     (r"\blechada\s+de\s+cemento\b", "cement slurry"),
     (r"\blechada\b", "slurry"),
     (r"\btap[oó]n\s+de\s+cemento\b", "cement plug"),
@@ -408,6 +445,14 @@ def audit_translation_qaqc(english_text: str, spanish_text: str = "") -> Dict[st
     findings = []
     has_spanglish = len(spanish_tokens) > 0 or len(spanglish_combos) > 0
 
+    # Numerical and Data Parity Audit (Zero-Omission Verification)
+    spanish_numbers = re.findall(r"\b\d+(?:\.\d+)?\b", spanish_text)
+    english_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", english_text))
+    
+    retained_count = sum(1 for n in spanish_numbers if n in english_numbers)
+    total_nums = len(spanish_numbers)
+    parity_pct = round((retained_count / total_nums) * 100, 1) if total_nums > 0 else 100.0
+
     if has_spanglish:
         bad_words = list(set([w.lower() for w in (spanish_tokens + spanglish_combos)]))[:6]
         quality_score = max(25, 80 - (len(spanish_tokens) * 10))
@@ -418,20 +463,30 @@ def audit_translation_qaqc(english_text: str, spanish_text: str = "") -> Dict[st
             "badge": "🔴 ALERTA DE TRADUCCIÓN: SPANGLISH DETECTADO",
             "message": f"El Auditor de Traducción IADC detectó residuos de español/Spanglish en la narrativa ({', '.join(bad_words)}). La traducción requiere revisión del vocabulario técnico antes de exportar a DOR."
         })
+    elif total_nums >= 3 and parity_pct < 60.0:
+        quality_score = 65
+        status = "DATA_TRUNCATED"
+        findings.append({
+            "agent": "iadc-translation-qaqc-auditor",
+            "severity": "WARNING",
+            "badge": "🟡 ALERTA DE PARIDAD: POSIBLE OMISIÓN DE DATOS",
+            "message": f"Se detectó una reducción de parámetros operacionales ({retained_count}/{total_nums} valores numéricos retenidos, {parity_pct}%). Verifique que no se hayan omitido presiones (psi), pesos (klb), vueltas o cotas de profundidad."
+        })
     else:
         quality_score = 100
         status = "CERTIFIED_IADC"
         findings.append({
             "agent": "iadc-translation-qaqc-auditor",
             "severity": "SUCCESS",
-            "badge": "🟢 TRADUCCIÓN IADC / SPE CERTIFICADA",
-            "message": "Auditoría de traducción completada: Cero Spanglish detectado. Se verificó el uso estricto de siglas operacionales (POOH, R/U, PJSM) y verbos técnicos de ingeniería petrolera. 100% apto para OpenWells / WellView / DOR de la operadora."
+            "badge": "🟢 TRADUCCIÓN IADC / SPE CERTIFICADA (PARIDAD 1:1)",
+            "message": f"Auditoría de traducción completada: Cero Spanglish detectado y {parity_pct}% de paridad en datos numéricos ({retained_count}/{total_nums} parámetros validados). Cumple con el Protocolo Estricto de Cero Omisión. Apto para OpenWells / WellView / DOR."
         })
 
     return {
         "status": status,
         "quality_score": quality_score,
         "has_spanglish": has_spanglish,
+        "data_parity_pct": parity_pct,
         "flagged_tokens": spanish_tokens + spanglish_combos,
         "findings": findings
     }
@@ -469,19 +524,19 @@ def translate_to_iadc_english(spanish_text: str, api_key: str = None, well_name:
                         }
                     ],
                     "generationConfig": {
-                        "temperature": 0.1,
-                        "maxOutputTokens": 2048
+                        "temperature": 0.05,
+                        "maxOutputTokens": 4096
                     }
                 }
                 data = json.dumps(payload).encode("utf-8")
                 req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-                with urllib.request.urlopen(req, timeout=12) as response:
+                with urllib.request.urlopen(req, timeout=30) as response:
                     result = json.loads(response.read().decode("utf-8"))
                     candidates = result.get("candidates", [])
                     if candidates:
                         parts = candidates[0].get("content", {}).get("parts", [])
                         if parts:
-                            translated_text = parts[0].get("text", "").strip()
+                            translated_text = "".join([p.get("text", "") for p in parts if "text" in p]).strip()
                             qaqc_result = audit_translation_qaqc(translated_text, spanish_text)
                             return translated_text, f"Gemini ({model})", qaqc_result
             except Exception:

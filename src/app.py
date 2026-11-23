@@ -338,7 +338,8 @@ async def index():
 
         textarea.editor-box {
             width: 100%;
-            height: 240px;
+            min-height: 280px;
+            max-height: 520px;
             background: #0E131A;
             border: 1px solid var(--border);
             color: #E2E8F0;
@@ -381,8 +382,8 @@ async def index():
             padding: 12px;
             font-family: var(--font-mono);
             font-size: 0.82rem;
-            min-height: 200px;
-            max-height: 280px;
+            min-height: 280px;
+            max-height: 520px;
             overflow-y: auto;
             white-space: pre-wrap;
             line-height: 1.6;
@@ -426,7 +427,7 @@ async def index():
             display: flex;
             flex-direction: column;
             gap: 8px;
-            max-height: 280px;
+            max-height: 520px;
             overflow-y: auto;
         }
         .finding-card {
@@ -443,8 +444,8 @@ async def index():
             font-family: var(--font-mono);
             font-size: 0.82rem;
             padding: 12px;
-            min-height: 200px;
-            max-height: 280px;
+            min-height: 280px;
+            max-height: 520px;
             overflow-y: auto;
             white-space: pre-wrap;
             line-height: 1.5;
@@ -527,17 +528,18 @@ async def index():
             </div>
         </div>
 
-        <!-- CAJA 3: RECOMENDACIONES QA/QC DE LOS 10 AGENTES -->
+        <!-- CAJA 3: RECOMENDACIONES QA/QC DE LOS 11 AGENTES -->
         <div class="card">
             <div class="card-header">
-                <div class="card-title"><span>🛡️</span> CAJA 3: Auditoría QA/QC de los 10 Agentes</div>
+                <div class="card-title"><span>🛡️</span> CAJA 3: Auditoría QA/QC de los 11 Agentes Especializados</div>
                 <span class="badge badge-cyan" id="findingsCountBadge">0 Alertas</span>
             </div>
             <div class="card-body">
                 <div class="findings-list" id="findingsListContainer">
                     <div style="font-size:0.8rem; color:var(--text-muted); padding:10px;">
-                        Aquí aparecerán las observaciones de los 10 agentes especializados:
-                        <br>• <b>Auditoría de Traducción IADC (Agent #10)</b>: Cero Spanglish, nomenclatura SPE, siglas operacionales.
+                        Aquí aparecerán las observaciones de los 11 agentes especializados:
+                        <br>• <b>Abandono & Barreras P&A (Agent #11)</b>: NORSOK D-010 / API RP 96, HMBP overpull, giros a derecha, carta Barton, balance de tapones, toque TOC (≥10 klb).
+                        <br>• <b>Auditoría de Traducción IADC (Agent #10)</b>: Cero Spanglish, cero omisión de datos, siglas operacionales IADC/SPE.
                         <br>• Integridad & BOP (API 53, pruebas en baja 250-350 psi, alta vs MASP, tiempos).
                         <br>• Movilización & Logística (R/D, R/M, R/U, cargas conciliadas, tarifas).
                         <br>• Tally & Sartas (holguras, velocidades, overpull).
@@ -565,6 +567,7 @@ async def index():
                     <div>
                         <span>⚡ Motor: <b id="translationEngineBadge" style="color:var(--amber)">Motor Especializado Offline IADC</b></span>
                         <span id="translationAuditBadge" class="badge badge-emerald" style="display:none; margin-left:8px;">🛡️ IADC Certified</span>
+                        <span id="dataParityBadge" class="badge badge-cyan" style="display:none; margin-left:6px;">⚖️ Paridad 100%</span>
                     </div>
                     <span id="copyConfirmNotice" style="color:var(--emerald)"></span>
                 </div>
@@ -791,7 +794,15 @@ async def index():
                         auditBadge.innerText = '⚠️ Spanglish Detectado (' + data.translation_qaqc.quality_score + '%)';
                     } else {
                         auditBadge.className = 'badge badge-emerald';
-                        auditBadge.innerText = '🛡️ IADC Certified (100%)';
+                        auditBadge.innerText = '🛡️ IADC Certified';
+                    }
+
+                    const parityBadge = document.getElementById('dataParityBadge');
+                    if (parityBadge && data.translation_qaqc.data_parity_pct !== undefined) {
+                        parityBadge.style.display = 'inline-block';
+                        const pPct = data.translation_qaqc.data_parity_pct;
+                        parityBadge.className = pPct >= 80 ? 'badge badge-cyan' : 'badge badge-amber';
+                        parityBadge.innerText = '⚖️ Paridad 1:1 (' + pPct + '%)';
                     }
                 }
 

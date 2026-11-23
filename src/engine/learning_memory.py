@@ -36,7 +36,16 @@ def classify_operational_domain(text: str) -> Dict[str, str]:
     """
     t_lower = text.lower()
     
-    # 1. BOP & Well Integrity Pressure Testing
+    # 1. P&A, Bridge Plugs & Mechanical Barriers (Highest Priority Downhole Isolation)
+    if re.search(r'\b(hmbp|bridge\s*plug|tap[oó]n|cemento|lechada|woc|toc|boc|squeeze|abandono|p&a|fraguado|testigos?)\b', t_lower):
+        return {
+            "domain": "PNA_BARRIER_ISOLATION",
+            "specialist": "pna-barrier-certifier",
+            "title": "Aislamiento de Barreras, Tapones HMBP y Abandono Definitivo (NORSOK D-010 / API RP 96)",
+            "icon": "🧱"
+        }
+
+    # 2. BOP & Well Integrity Pressure Testing
     if re.search(r'\b(bop|anular|pipe\s*rams?|blind\s*rams?|shear\s*rams?|choke\s*manifold|preventor(?:as?)?|acumulador|koomey)\b', t_lower):
         if re.search(r'\b(prueba|presi[oó]n|en\s+baja|en\s+alta|psi)\b', t_lower):
             return {
@@ -46,22 +55,13 @@ def classify_operational_domain(text: str) -> Dict[str, str]:
                 "icon": "🛡️"
             }
             
-    # 2. Rig Move & Logistics
+    # 3. Rig Move & Logistics
     if re.search(r'\b(movilizaci[oó]n|mudanza|desarme|arme|r/d|r/m|r/u|cargas?|recibo\s+de\s+equipo|lump\s+sum)\b', t_lower):
         return {
             "domain": "RIG_MOVE_LOGISTICS",
             "specialist": "rig-move-logistics-specialist",
             "title": "Movilización, Logística y Arme/Desarme de Taladro",
             "icon": "🚛"
-        }
-        
-    # 3. Cementing & P&A
-    if re.search(r'\b(cemento|tap[oó]n|lechada|woc|toc|boc|squeeze|hmbp|bridge\s+plug|fraguado|testigos?)\b', t_lower):
-        return {
-            "domain": "CEMENTING_PNA",
-            "specialist": "well-control-pna-specialist",
-            "title": "Cementación, Tapones de Abandono (P&A) y Barreras de Fondo",
-            "icon": "🧱"
         }
         
     # 4. Artificial Lift (ESP/SRP/Gas Lift/PCP)
