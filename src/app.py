@@ -588,7 +588,29 @@ async def index():
 
             <button class="btn btn-ghost" onclick="loadSampleData()">📂 Cargar Ejemplo Yopo-1</button>
             <!-- CAJA FUERTE ZERO-KNOWLEDGE API -->
-            <div id="apiVaultContainer"></div>
+            <div id="apiVaultContainer">
+                <div style="display:inline-flex; align-items:center; gap:6px; background:#0E131A; border:1px solid var(--border); padding:3px 8px; border-radius:4px;" title="Seleccione proveedor y pegue su API Key (OpenAI, DeepSeek, Claude, Groq o Gemini).">
+                    <select id="providerSelect" class="meta-input" style="padding:2px 4px; font-size:0.75rem; background:#080B0F; border:1px solid #232E3E; color:var(--text-main); border-radius:3px;">
+                        <option value="auto">🤖 Auto-Detectar</option>
+                        <option value="deepseek">🐳 DeepSeek (V3 / R1)</option>
+                        <option value="openai">🟢 OpenAI (GPT-4o)</option>
+                        <option value="anthropic">🟣 Claude 3.5</option>
+                        <option value="groq">⚡ Groq (Llama 3.3)</option>
+                        <option value="gemini">🔵 Google Gemini</option>
+                    </select>
+                    <input 
+                        type="password" 
+                        id="secureApiKeyInput" 
+                        class="api-input" 
+                        placeholder="Pegar API Key..." 
+                        autocomplete="off" 
+                        spellcheck="false"
+                        onkeydown="if(event.key==='Enter') saveApiKeyClient()"
+                        style="width:140px; letter-spacing:1px;"
+                    >
+                    <button type="button" class="btn-vault-save" onclick="saveApiKeyClient()" title="Guardar Clave de IA">💾</button>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -824,7 +846,35 @@ async def index():
             }
         }
 
-        window.addEventListener('DOMContentLoaded', renderApiVault);
+        async function syncApiStatusFromServer() {
+            if (!getClientApiKey()) {
+                try {
+                    const res = await fetch('/api/config/api-key-status');
+                    const d = await res.json();
+                    if (d.has_key) {
+                        const rigBadge = document.getElementById('rigStatusBadge');
+                        if (rigBadge) {
+                            rigBadge.className = 'badge badge-emerald';
+                            rigBadge.innerText = '🟢 Servidor Conectado';
+                        }
+                    }
+                } catch(e) {}
+            }
+        }
+
+        // Render immediately and on all window load events
+        renderApiVault();
+        syncApiStatusFromServer();
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                renderApiVault();
+                syncApiStatusFromServer();
+            });
+        }
+        window.addEventListener('load', () => {
+            renderApiVault();
+            syncApiStatusFromServer();
+        });
 
         async function loadSampleData() {
             try {
