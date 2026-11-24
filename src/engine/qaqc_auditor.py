@@ -250,7 +250,7 @@ def offline_polish_spanish(raw_text: str) -> Tuple[str, List[Dict[str, Any]], Li
     )
     if tripping_pattern.search(text):
         # 1. Expansion for tubular without thread/weight (on raw text): e.g. "TBG 2-7/8"" or "tubería 2-7/8""
-        tbg_spec_pattern = re.compile(r'\b(tbg|tuber[ií]a)\s*(2-3/8|2-7/8|3-1/2|4-1/2|5)(?:\"|\'\')?(?!\s*\[)(?!\s*lb/ft)', re.IGNORECASE)
+        tbg_spec_pattern = re.compile(r'(?<!ej\.\s)(?<!ejemplo:\s)\b(tbg|tuber[ií]a)\s*(2-3/8|2-7/8|3-1/2|4-1/2|5)(?:\"|\'\')?(?!\s*\[)(?!\s*\d)(?!\s*lb/ft)', re.IGNORECASE)
         if tbg_spec_pattern.search(text):
             text = tbg_spec_pattern.sub(r'\1 \2" [especificar: rosca ej. EUE 8RD, peso: ___ lb/ft, grado: ___]', text)
 
@@ -424,6 +424,88 @@ def offline_polish_spanish(raw_text: str) -> Tuple[str, List[Dict[str, Any]], Li
     return text, findings, learning_tips
 
 
+def enforce_golden_paragraph_standards(text: str, raw_text: str = "") -> Tuple[str, List[Dict[str, Any]], List[str]]:
+    """
+    Enforces canonical SPE/IADC Golden Paragraph formatting and interactive placeholders [___]
+    on operations text, ensuring high technical rigour regardless of whether the primary
+    draft was produced by an LLM (DeepSeek, OpenAI) or deterministic heuristics.
+    """
+    findings: List[Dict[str, Any]] = []
+    learning_tips: List[str] = []
+
+    # 1. Clean accidental prompt banner titles injected by AI if any
+    text = re.sub(r"^(?:REPORTE\s+T[EÉ]CNICO[^\n]*|DOR[^\n]*)\n+", "", text, flags=re.IGNORECASE).strip()
+
+    # 2. Field Typos & BES Standardizations
+    text = re.sub(r"\bm[il]s\s+joints?\b", "MLE (Motor Lead Extension)", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bovercoupling\b", "overcouplings con superbandas", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bxequipos\b", "equipos de superficie Novomet", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bpup\s+joi\s*t\b", "pup joint de manejo", text, flags=re.IGNORECASE)
+
+    # 3. Canonical POOH expansions if missing
+    # Case A: "Se retiran X juntas de tubería..."
+    m_retira = re.search(r"(?:se\s+retiran?|retirando)\s+(\d+)\s+juntas\s+de\s+tuber[ií]a(?!\s*\(.*TOTAL)", text, re.IGNORECASE)
+    if m_retira:
+        jtas_ret = m_retira.group(1)
+        repl_retira = f"POOH [especificar tubular: ej. TBG 3-1/2\" 9.3 lb/ft N-80 EUE] quebrando en sencillos a rack desde [___ ft] hasta [___ ft], retirando {jtas_ret} juntas ({jtas_ret}/[TOTAL JTS] jtas), avance: [___]%, SWU: [___] klb, SWD: [___] klb, Vel: [___] jts/h, condición de sarta: [tubería llena/seca]"
+        text = text.replace(m_retira.group(0), repl_retira)
+
+    # Case B: "Se continúa sacando tubería hasta la junta #X..."
+    m_cont = re.search(r"se\s+contin[uú]a\s+sacando\s+tuber[ií]a\s+hasta\s+la\s+junta\s*#?\s*(\d+)(?!\s*\(.*TOTAL)", text, re.IGNORECASE)
+    if m_cont:
+        j_target = m_cont.group(1)
+        repl_cont = f"Continuó POOH [especificar tubular: ej. TBG 3-1/2\" 9.3 lb/ft N-80 EUE] con tubería [llena / seca] quebrando en sencillos a rack desde [___ ft] hasta [___ ft] retirando juntas hasta acumulado ({j_target}/[TOTAL JTS] jtas, avance: [___]%), SWU: [___] klb, SWD: [___] klb, Vel: [___] jts/h"
+        text = text.replace(m_cont.group(0), repl_cont)
+
+    # Case C: Cable Splice Check
+    m_splice = re.search(r"\bempalme\s+de\s+cable\b(?!\s*\[)", text, re.IGNORECASE)
+    if m_splice:
+        text = re.sub(r"\bempalme\s+de\s+cable\b(?!\s*\[)", "empalme de cable [especificar estado e integridad: ej. aislamiento > 1000 MΩ, prueba megger]", text, flags=re.IGNORECASE)
+        findings.append({
+            "agent": "esp-artificial-lift-specialist",
+            "severity": "WARNING",
+            "badge": "⚡ INTEGRIDAD BES: EMPALME DE CABLE",
+            "message": "Se detectó empalme de cable en la sarta. En sistemas BES, todo empalme debe verificar prueba de aislamiento eléctrico (Megger > 1000 MΩ)."
+        })
+        learning_tips.append("💡 Práctica BES: Al recuperar un empalme de cable en sacada (POOH), verifique la continuidad de fases y resistencia de aislamiento a tierra (Megger).")
+
+    # Case D: "RIH/POOH BHA No. X" without objective
+    bha_obj_pattern = re.compile(r"\b((?:rih|pooh)\s+bha\s+no\.?\s*\d+)\b(?!\s*\[)", re.IGNORECASE)
+    if bha_obj_pattern.search(text):
+        text = bha_obj_pattern.sub(r"\1 [especificar tipo de BHA y objetivo: ej. pesca / completamiento / limpieza]", text)
+
+    # Case E: Tubular without thread/weight: "TBG 2-7/8""
+    tbg_spec_pattern = re.compile(r'(?<!ej\.\s)(?<!ejemplo:\s)\b(tbg|tuber[ií]a)\s*(2-3/8|2-7/8|3-1/2|4-1/2|5)(?:\"|\'\')?(?!\s*\[)(?!\s*\d)(?!\s*lb/ft)', re.IGNORECASE)
+    if tbg_spec_pattern.search(text):
+        text = tbg_spec_pattern.sub(r'\1 \2" [especificar: rosca ej. EUE 8RD, peso: ___ lb/ft, grado: ___]', text)
+
+    # Case F: Single tally count "(26 Jts)" to fraction + advance %
+    single_tally_pattern = re.compile(r"\(\s*(\d+)\s*(?:jts?|juntas?|jtas?)\s*\)(?!\s*,\s*avance)(?!/)", re.IGNORECASE)
+    if single_tally_pattern.search(text):
+        text = single_tally_pattern.sub(r"(\1/[TOTAL JTS] jtas), avance: [___]%", text)
+
+    # Case G: Circulation without rate or fluid
+    circ_match = re.search(r"circulaci[oó]n\s+en\s+directa\s+(\d+)\s*bbls?\s+con\s+(\d+)\s*psi(?!\s*\[)", text, re.IGNORECASE)
+    if circ_match:
+        bbls = circ_match.group(1)
+        psi = circ_match.group(2)
+        better_circ = f"circulación en directa de {bbls} bbl de fluido [especificar fluido: agua industrial / salmuera] a [___ bpm] con {psi} psi y retorno a catch tank"
+        text = text.replace(circ_match.group(0), better_circ)
+
+    # Add POOH / RIH best practice tips if tripping is present and not already in tips
+    if re.search(r"\b(pooh|rih|pulling|sacar\s+tuber[ií]a|sacando\s+tuber[ií]a)\b", text, re.IGNORECASE):
+        pooh_tips = [
+            "En toda maniobra de sacada (POOH) registra siempre: cota inicial y final, número de junta extraída, total de juntas de la sarta y porcentaje de avance para auditar el tally.",
+            "Documente los pesos de sarta (SWU y SWD) en cada viaje para detectar arrastre excesivo o sobrecargas que puedan indicar pega o fricción anormal.",
+            "Registra el volumen desplazado y el nivel del trip tank durante el viaje; un llenado incorrecto puede permitir un influjo (kick) por pistoneo (API RP 59)."
+        ]
+        for pt in pooh_tips:
+            if pt not in learning_tips:
+                learning_tips.append(pt)
+
+    return text, findings, learning_tips
+
+
 # ==============================================================================
 # AI-POWERED SPANISH ENGINEERING AUDITOR (DeepSeek, OpenAI, Groq, Claude, Gemini)
 # ==============================================================================
@@ -458,8 +540,10 @@ def call_ai_spanish_audit(text: str, api_key: str, provider: str = "auto", well_
             prov = "anthropic"
         elif k.startswith("gsk_"):
             prov = "groq"
+        elif k.startswith("sk-") and len(k) <= 36:
+            # DeepSeek keys typically have length 34-35 (sk- followed by 32 hex chars)
+            prov = "deepseek"
         elif k.startswith("sk-"):
-            # Could be DeepSeek or OpenAI
             prov = "openai"
         elif k.startswith("AIza"):
             prov = "gemini"
@@ -625,6 +709,17 @@ def audit_operations_text(raw_text: str, api_key: str = None, provider: str = "a
         corrected_text, off_findings, off_tips = offline_polish_spanish(raw_text)
         findings.extend(off_findings)
         learning_tips.extend(off_tips)
+
+    # -------------------------------------------------------------
+    # 2.5. CANONICAL GOLDEN PARAGRAPH & INTERACTIVE PLACEHOLDER ENFORCEMENT
+    # -------------------------------------------------------------
+    # Guarantees that whether generated by AI or offline polisher, the canonical
+    # engineering paragraph and interactive [___] placeholders are strictly enforced.
+    corrected_text, enf_findings, enf_tips = enforce_golden_paragraph_standards(corrected_text, raw_text=raw_text)
+    findings.extend(enf_findings)
+    for tip in enf_tips:
+        if tip not in learning_tips:
+            learning_tips.append(tip)
 
     # -------------------------------------------------------------
     # 3. DETERMINISTIC REINFORCEMENTS: CEMENT MATH & DATES

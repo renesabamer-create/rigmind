@@ -18,9 +18,22 @@ def load_server_api_key():
     if os.path.exists(API_KEY_FILE):
         try:
             with open(API_KEY_FILE, "r", encoding="utf-8") as f:
-                k = f.read().strip()
-                if k:
-                    os.environ["GEMINI_API_KEY"] = k
+                content = f.read().strip()
+                if content:
+                    if ":" in content:
+                        provider, k = content.split(":", 1)
+                    else:
+                        provider, k = "auto", content
+                    if provider == "deepseek" or (len(k) == 32 and not k.startswith("AIza")):
+                        os.environ["DEEPSEEK_API_KEY"] = k
+                    elif provider == "openai":
+                        os.environ["OPENAI_API_KEY"] = k
+                    elif provider == "anthropic":
+                        os.environ["ANTHROPIC_API_KEY"] = k
+                    elif provider == "groq":
+                        os.environ["GROQ_API_KEY"] = k
+                    else:
+                        os.environ["GEMINI_API_KEY"] = k
         except Exception:
             pass
 
@@ -28,6 +41,7 @@ load_server_api_key()
 
 class ApiKeyConfigRequest(BaseModel):
     api_key: str
+    provider: Optional[str] = "auto"
 
 class AuditRequest(BaseModel):
     raw_text: str
@@ -50,21 +64,31 @@ class SaveMemoryRequest(BaseModel):
 
 @app.get("/api/config/api-key-status")
 async def get_api_key_status():
-    return {"has_key": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY"))}
+    return {"has_key": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY"))}
 
 @app.post("/api/config/api-key")
 async def save_api_key(req: ApiKeyConfigRequest):
     key = req.api_key.strip()
     if not key:
         return JSONResponse({"error": "La clave no puede estar vacía."}, status_code=400)
-    os.environ["GEMINI_API_KEY"] = key
+    provider = req.provider or "auto"
+    if provider == "deepseek" or (provider == "auto" and (len(key) == 32 and not key.startswith("AIza"))):
+        os.environ["DEEPSEEK_API_KEY"] = key
+    elif provider == "openai" or (provider == "auto" and key.startswith("sk-") and not key.startswith("sk-ant-")):
+        os.environ["OPENAI_API_KEY"] = key
+    elif provider == "anthropic" or (provider == "auto" and key.startswith("sk-ant-")):
+        os.environ["ANTHROPIC_API_KEY"] = key
+    elif provider == "groq" or (provider == "auto" and key.startswith("gsk_")):
+        os.environ["GROQ_API_KEY"] = key
+    else:
+        os.environ["GEMINI_API_KEY"] = key
     try:
         os.makedirs(os.path.dirname(API_KEY_FILE), exist_ok=True)
         with open(API_KEY_FILE, "w", encoding="utf-8") as f:
-            f.write(key)
+            f.write(f"{provider}:{key}")
     except Exception as e:
         return JSONResponse({"error": f"Error al guardar la clave: {str(e)}"}, status_code=500)
-    return {"status": "ok", "has_key": True}
+    return {"status": "ok", "has_key": True, "provider": provider}
 
 @app.delete("/api/config/api-key")
 async def delete_api_key():
@@ -720,23 +744,35 @@ async def index():
     </div>
 
     <script>
-        let latestAuditData = null;
-        let isDiffMode = false;
+        window.latestAuditData = null;
+        window.isDiffMode = false;
+        let inMemoryApiKey = '';
+        let inMemoryProvider = 'auto';
+
+        function setClientApiKey(key, provider) {
+            inMemoryApiKey = key;
+            inMemoryProvider = provider;
+            try { localStorage.setItem('rigmind_api_key', key); localStorage.setItem('rigmind_provider', provider); } catch(e) {}
+            try { sessionStorage.setItem('rigmind_api_key', key); sessionStorage.setItem('rigmind_provider', provider); } catch(e) {}
+        }
 
         function getClientApiKey() {
-            try {
-                return localStorage.getItem('rigmind_api_key') || '';
-            } catch (e) {
-                return '';
-            }
+            try { const k = localStorage.getItem('rigmind_api_key'); if (k) return k; } catch(e) {}
+            try { const k = sessionStorage.getItem('rigmind_api_key'); if (k) return k; } catch(e) {}
+            return inMemoryApiKey || '';
         }
 
         function getClientProvider() {
-            try {
-                return localStorage.getItem('rigmind_provider') || 'auto';
-            } catch (e) {
-                return 'auto';
-            }
+            try { const p = localStorage.getItem('rigmind_provider'); if (p) return p; } catch(e) {}
+            try { const p = sessionStorage.getItem('rigmind_provider'); if (p) return p; } catch(e) {}
+            return inMemoryProvider || 'auto';
+        }
+
+        function clearClientApiKey() {
+            inMemoryApiKey = '';
+            inMemoryProvider = 'auto';
+            try { localStorage.removeItem('rigmind_api_key'); localStorage.removeItem('rigmind_provider'); } catch(e) {}
+            try { sessionStorage.removeItem('rigmind_api_key'); sessionStorage.removeItem('rigmind_provider'); } catch(e) {}
         }
 
         function detectProviderFromKey(key) {
@@ -744,9 +780,10 @@ async def index():
             const k = key.trim();
             if (k.startsWith('sk-ant-')) return 'anthropic';
             if (k.startsWith('gsk_')) return 'groq';
+            if (k.startsWith('sk-') && k.length <= 36) return 'deepseek';
             if (k.startsWith('sk-')) return 'openai';
             if (k.startsWith('AIza')) return 'gemini';
-            return 'auto';
+            return 'deepseek';
         }
 
         function renderApiVault() {
@@ -778,43 +815,47 @@ async def index():
                     rigBadge.innerText = providerLabel + ' Conectado';
                 }
 
-                container.innerHTML = `
-                    <div style="display:inline-flex; align-items:center; gap:8px; background:rgba(16, 185, 129, 0.12); border:1px solid rgba(16, 185, 129, 0.5); padding:4px 10px; border-radius:4px;" title="API Key blindada en su navegador y servidor.">
-                        <span style="font-size:0.75rem; color:#34D399; font-weight:600; display:flex; align-items:center; gap:5px;">
-                            <span>🔒</span> <span>${providerLabel} (******)</span>
-                        </span>
-                        <button type="button" class="btn-vault-action" onclick="changeApiKey()" title="Cambiar clave o proveedor">⚙️ Cambiar</button>
-                    </div>
-                `;
+                if (container) {
+                    container.innerHTML = `
+                        <div style="display:inline-flex; align-items:center; gap:8px; background:rgba(16, 185, 129, 0.12); border:1px solid rgba(16, 185, 129, 0.5); padding:4px 10px; border-radius:4px;" title="API Key blindada en su navegador y servidor.">
+                            <span style="font-size:0.75rem; color:#34D399; font-weight:600; display:flex; align-items:center; gap:5px;">
+                                <span>🔒</span> <span>${providerLabel} (******)</span>
+                            </span>
+                            <button type="button" class="btn-vault-action" onclick="window.changeApiKey()" title="Cambiar clave o proveedor">⚙️ Cambiar</button>
+                        </div>
+                    `;
+                }
             } else {
                 if (rigBadge) {
                     rigBadge.className = 'badge badge-amber';
                     rigBadge.innerText = '⚡ Motor Offline (Sin Clave IA)';
                 }
 
-                container.innerHTML = `
-                    <div style="display:inline-flex; align-items:center; gap:6px; background:#0E131A; border:1px solid var(--border); padding:3px 8px; border-radius:4px;" title="Seleccione proveedor y pegue su API Key (OpenAI, Anthropic Claude, Groq o Gemini).">
-                        <select id="providerSelect" class="meta-input" style="padding:2px 4px; font-size:0.75rem; background:#080B0F; border:1px solid #232E3E; color:var(--text-main); border-radius:3px;">
-                            <option value="auto">🤖 Auto-Detectar</option>
-                            <option value="deepseek">🐳 DeepSeek (V3 / R1)</option>
-                            <option value="openai">🟢 OpenAI (GPT-4o)</option>
-                            <option value="anthropic">🟣 Claude 3.5</option>
-                            <option value="groq">⚡ Groq (Llama 3.3)</option>
-                            <option value="gemini">🔵 Google Gemini</option>
-                        </select>
-                        <input 
-                            type="password" 
-                            id="secureApiKeyInput" 
-                            class="api-input" 
-                            placeholder="Pegar API Key..." 
-                            autocomplete="off" 
-                            spellcheck="false"
-                            onkeydown="if(event.key==='Enter') saveApiKeyClient()"
-                            style="width:140px; letter-spacing:1px;"
-                        >
-                        <button type="button" class="btn-vault-save" onclick="saveApiKeyClient()" title="Guardar Clave de IA">💾</button>
-                    </div>
-                `;
+                if (container) {
+                    container.innerHTML = `
+                        <div style="display:inline-flex; align-items:center; gap:6px; background:#0E131A; border:1px solid var(--border); padding:3px 8px; border-radius:4px;" title="Seleccione proveedor y pegue su API Key (DeepSeek, OpenAI, Anthropic Claude, Groq o Gemini).">
+                            <select id="providerSelect" class="meta-input" style="padding:2px 4px; font-size:0.75rem; background:#080B0F; border:1px solid #232E3E; color:var(--text-main); border-radius:3px;">
+                                <option value="auto">🤖 Auto-Detectar</option>
+                                <option value="deepseek">🐳 DeepSeek (V3 / R1)</option>
+                                <option value="openai">🟢 OpenAI (GPT-4o)</option>
+                                <option value="anthropic">🟣 Claude 3.5</option>
+                                <option value="groq">⚡ Groq (Llama 3.3)</option>
+                                <option value="gemini">🔵 Google Gemini</option>
+                            </select>
+                            <input 
+                                type="password" 
+                                id="secureApiKeyInput" 
+                                class="api-input" 
+                                placeholder="Pegar API Key..." 
+                                autocomplete="off" 
+                                spellcheck="false" 
+                                onkeydown="if(event.key==='Enter') window.saveApiKeyClient()"
+                                style="width:140px; letter-spacing:1px;"
+                            >
+                            <button type="button" class="btn-vault-save" onclick="window.saveApiKeyClient()" title="Guardar Clave de IA">💾</button>
+                        </div>
+                    `;
+                }
             }
         }
 
@@ -824,32 +865,41 @@ async def index():
             if (!input) return;
             const key = input.value.trim();
             if (!key) {
-                alert('Por favor pegue la clave de API (OpenAI, Anthropic Claude, Groq o Gemini) antes de guardar.');
+                alert('Por favor pegue la clave de API (DeepSeek, OpenAI, Anthropic Claude, Groq o Gemini) antes de guardar.');
                 return;
             }
 
-            const provider = provSelect ? provSelect.value : 'auto';
-            localStorage.setItem('rigmind_api_key', key);
-            localStorage.setItem('rigmind_provider', provider);
+            let provider = provSelect ? provSelect.value : 'auto';
+            if (provider === 'auto') {
+                provider = detectProviderFromKey(key);
+            }
 
-            // Also send to backend for server-side persistence
+            // Guardar inmediatamente en los 3 niveles del cliente
+            setClientApiKey(key, provider);
+
+            // Actualizar UI INMEDIATAMENTE al estado blindado/conectado
+            renderApiVault();
+
+            // Notificar al servidor en segundo plano
             try {
                 await fetch('/api/config/api-key', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ api_key: key })
+                    body: JSON.stringify({ api_key: key, provider: provider })
                 });
-            } catch(e) {}
+            } catch(e) {
+                console.warn("Sync error:", e);
+            }
 
-            input.value = '';
-            renderApiVault();
-            alert('🔒 ¡API Key configurada exitosamente! Se ha guardado en su navegador y servidor de manera blindada. Ahora puede procesar cualquier reporte con traducción IADC oficial.');
+            alert('🔒 ¡API Key configurada exitosamente! Se ha guardado en su navegador y servidor de manera blindada. Ahora puede procesar cualquier reporte con auditoría de ingeniería y traducción IADC.');
         }
 
         function changeApiKey() {
             if (confirm('¿Desea cambiar o ingresar una nueva API Key de IA?')) {
-                localStorage.removeItem('rigmind_api_key');
-                localStorage.removeItem('rigmind_provider');
+                clearClientApiKey();
+                try {
+                    fetch('/api/config/api-key', { method: 'DELETE' }).catch(() => {});
+                } catch(e) {}
                 renderApiVault();
             }
         }
@@ -964,8 +1014,8 @@ async def index():
                 editor.value = data.corrected_spanish;
                 diffBox.innerHTML = data.visual_diff_html;
 
-                // Reset to editor view if in diff
-                if (isDiffMode) {
+                // Reset to editor view if currently in diff
+                if (window.isDiffMode && typeof toggleDiffMode === 'function') {
                     toggleDiffMode();
                 }
 
@@ -1073,25 +1123,25 @@ async def index():
             const diffBox = document.getElementById('diffViewBox');
             const toggleBtn = document.getElementById('btnToggleDiff');
 
-            if (!isDiffMode) {
+            if (!window.isDiffMode) {
                 // Show Diff
-                editor.style.display = 'none';
-                diffBox.style.display = 'block';
-                toggleBtn.innerText = '✏️ Modo Editor';
-                isDiffMode = true;
+                if (editor) editor.style.display = 'none';
+                if (diffBox) diffBox.style.display = 'block';
+                if (toggleBtn) toggleBtn.innerText = '✏️ Modo Editor';
+                window.isDiffMode = true;
             } else {
                 // Show Editor
-                editor.style.display = 'block';
-                diffBox.style.display = 'none';
-                toggleBtn.innerText = '🔍 Ver Diff';
-                isDiffMode = false;
+                if (editor) editor.style.display = 'block';
+                if (diffBox) diffBox.style.display = 'none';
+                if (toggleBtn) toggleBtn.innerText = '🔍 Ver Diff';
+                window.isDiffMode = false;
             }
         }
 
         /* NAVEGACIÓN Y RELLENADO INTELIGENTE DE CAMPOS [___] (CAJA 2) */
         function focusNextPlaceholder() {
             const editor = document.getElementById('polishedTextInput');
-            if (isDiffMode) {
+            if (window.isDiffMode && typeof toggleDiffMode === 'function') {
                 toggleDiffMode(); // Cambia al editor interactivo
             }
             editor.focus();
@@ -1149,7 +1199,7 @@ async def index():
                     const blank = e.target.closest('.diff-blank');
                     if (blank) {
                         const targetText = blank.innerText.trim();
-                        if (isDiffMode) toggleDiffMode();
+                        if (window.isDiffMode && typeof toggleDiffMode === 'function') toggleDiffMode();
                         const ed = document.getElementById('polishedTextInput');
                         ed.focus();
                         const idx = ed.value.indexOf(targetText);
@@ -1170,6 +1220,9 @@ async def index():
         window.runStage2Translate = runStage2Translate;
         window.toggleDiffMode = toggleDiffMode;
         window.focusNextPlaceholder = focusNextPlaceholder;
+        window.saveApiKeyClient = saveApiKeyClient;
+        window.changeApiKey = changeApiKey;
+        window.renderApiVault = renderApiVault;
 
         /* FASE 2: CERTIFICACIÓN IADC Y TRADUCCIÓN A INGLÉS OFICIAL */
         async function runStage2Translate() {

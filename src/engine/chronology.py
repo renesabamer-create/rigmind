@@ -20,6 +20,15 @@ def minutes_to_hhmm(mins: int) -> str:
     mn = mins % 60
     return f"{h:02d}:{mn:02d}"
 
+def normalize_hhmm(t_str: str) -> str:
+    """Normalizes time string to standard 2-digit HH:MM format (e.g. 6:00 -> 06:00)."""
+    if not t_str:
+        return t_str
+    m = re.match(r"^(\d{1,2}):(\d{2})", t_str.strip())
+    if m:
+        return f"{int(m.group(1)):02d}:{int(m.group(2)):02d}"
+    return t_str
+
 def calculate_duration(t_from: str, t_to: str) -> float:
     """Calculates duration in decimal hours between two time strings."""
     m_from = parse_time_minutes(t_from)
@@ -63,10 +72,11 @@ def parse_raw_timeline(text: str) -> Dict[str, Any]:
         m_int = interval_regex.match(line)
         if m_int:
             t_start, t_end, rest = m_int.groups()
+            rest = re.sub(r"^(?:hrs?|horas?)\s*", "", rest.strip(), flags=re.IGNORECASE)
             current_block = {
                 "type": "interval",
-                "start": t_start,
-                "end": t_end,
+                "start": normalize_hhmm(t_start),
+                "end": normalize_hhmm(t_end),
                 "lines": [rest.strip()] if rest.strip() else []
             }
             raw_blocks.append(current_block)
@@ -75,9 +85,10 @@ def parse_raw_timeline(text: str) -> Dict[str, Any]:
         m_single = single_time_regex.match(line)
         if m_single:
             t_start, rest = m_single.groups()
+            rest = re.sub(r"^(?:hrs?|horas?)\s*", "", rest.strip(), flags=re.IGNORECASE)
             current_block = {
                 "type": "single",
-                "start": t_start,
+                "start": normalize_hhmm(t_start),
                 "end": None,
                 "lines": [rest.strip()] if rest.strip() else []
             }

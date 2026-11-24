@@ -528,11 +528,13 @@ def detect_llm_provider(api_key: str, requested_provider: str = "auto") -> str:
         return "anthropic"
     elif k.startswith("gsk_"):
         return "groq"
+    elif k.startswith("sk-") and len(k) <= 36:
+        return "deepseek"
     elif k.startswith("sk-"):
         return "openai"
     elif k.startswith("AIza"):
         return "gemini"
-    return "gemini"
+    return "deepseek" if len(k) == 32 else "gemini"
 
 
 def call_deepseek_translation(text: str, api_key: str, well_name: str = "Well", model: str = "deepseek-chat") -> str:
@@ -706,7 +708,7 @@ def translate_to_iadc_english(
     Supports: OpenAI (GPT-4o), Anthropic Claude, Groq (Llama 3.3) and Google Gemini.
     Provides complete error transparency: never silently drops to Spanglish without alerting the user.
     """
-    effective_key = api_key or os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    effective_key = api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY") or os.environ.get("GEMINI_API_KEY")
     selected_provider = detect_llm_provider(effective_key, requested_provider=provider)
 
     if not force_offline and effective_key:
