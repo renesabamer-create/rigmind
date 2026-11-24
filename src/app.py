@@ -882,6 +882,8 @@ async def index():
             }
         }
 
+        window.renderApiVault = renderApiVault;
+
         async function saveApiKeyClient() {
             const input = document.getElementById('secureApiKeyInput');
             const provSelect = document.getElementById('providerSelect');
@@ -940,6 +942,7 @@ async def index():
 
             alert(`✅ ¡Conexión con ${provider.toUpperCase()} VERIFICADA exitosamente!\n\nSu API Key está activa y probada en tiempo real. Ahora puede auditar y traducir con IA.`);
         }
+        window.saveApiKeyClient = saveApiKeyClient;
 
         async function testApiKeyClient() {
             const key = getClientApiKey();
@@ -979,6 +982,7 @@ async def index():
                 alert(`❌ Error de red al probar la clave: ${err.message}`);
             }
         }
+        window.testApiKeyClient = testApiKeyClient;
 
         function changeApiKey() {
             if (confirm('¿Desea cambiar o ingresar una nueva API Key de IA?')) {
@@ -989,6 +993,7 @@ async def index():
                 renderApiVault();
             }
         }
+        window.changeApiKey = changeApiKey;
 
         async function syncApiStatusFromServer() {
             if (!getClientApiKey()) {
@@ -1244,7 +1249,7 @@ async def index():
             }
             editor.focus();
             const text = editor.value;
-            const regex = /\[[^\]\n]+\]/g;
+            const regex = /\\[[^\\]\\r\\n]+\\]/g;
             let match;
             const currentPos = editor.selectionEnd || 0;
 
@@ -1261,7 +1266,7 @@ async def index():
             if (match) {
                 editor.setSelectionRange(match.index, match.index + match[0].length);
                 const lineHeight = 20;
-                const linesBefore = text.substring(0, match.index).split('\n').length;
+                const linesBefore = text.substring(0, match.index).split("\\n").length;
                 editor.scrollTop = Math.max(0, (linesBefore - 3) * lineHeight);
             } else {
                 alert('✅ ¡Todos los campos obligatorios [___] han sido completados!');
@@ -1275,7 +1280,7 @@ async def index():
                 editor.addEventListener('keydown', function(e) {
                     if (e.key === 'Tab') {
                         const text = this.value;
-                        const regex = /\[[^\]\n]+\]/g;
+                        const regex = /\\[[^\\]\\r\\n]+\\]/g;
                         regex.lastIndex = this.selectionEnd || 0;
                         let match = regex.exec(text);
                         if (!match) {
@@ -1496,4 +1501,11 @@ Smart Resources - https://rigmind.smartresources.com.co
     </script>
 </body>
 </html>"""
-    return HTMLResponse(content=html_content)
+    return HTMLResponse(
+        content=html_content,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
