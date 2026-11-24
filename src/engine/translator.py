@@ -3,6 +3,7 @@ import re
 import urllib.request
 import json
 from typing import Dict, Any, Tuple, List
+from src.engine.llm_network import execute_llm_request, detect_provider
 
 # ==============================================================================
 # ELITE IADC / SPE PROMPT SPECIFICATION (Gemini 3.5 & Multimodal Engines)
@@ -556,13 +557,10 @@ def call_deepseek_translation(text: str, api_key: str, well_name: str = "Well", 
         "temperature": 0.05,
         "max_tokens": 4096
     }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers)
-    with urllib.request.urlopen(req, timeout=35) as response:
-        result = json.loads(response.read().decode("utf-8"))
-        choices = result.get("choices", [])
-        if choices:
-            return choices[0].get("message", {}).get("content", "").strip()
+    result = execute_llm_request(url, payload, headers, timeout=40)
+    choices = result.get("choices", [])
+    if choices:
+        return choices[0].get("message", {}).get("content", "").strip()
     raise ValueError("DeepSeek returned an empty response")
 
 
@@ -585,13 +583,10 @@ def call_openai_translation(text: str, api_key: str, well_name: str = "Well", mo
         "temperature": 0.05,
         "max_tokens": 4096
     }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers)
-    with urllib.request.urlopen(req, timeout=35) as response:
-        result = json.loads(response.read().decode("utf-8"))
-        choices = result.get("choices", [])
-        if choices:
-            return choices[0].get("message", {}).get("content", "").strip()
+    result = execute_llm_request(url, payload, headers, timeout=40)
+    choices = result.get("choices", [])
+    if choices:
+        return choices[0].get("message", {}).get("content", "").strip()
     raise ValueError("OpenAI returned an empty response")
 
 
@@ -614,13 +609,10 @@ def call_groq_translation(text: str, api_key: str, well_name: str = "Well", mode
         "temperature": 0.05,
         "max_tokens": 4096
     }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers)
-    with urllib.request.urlopen(req, timeout=35) as response:
-        result = json.loads(response.read().decode("utf-8"))
-        choices = result.get("choices", [])
-        if choices:
-            return choices[0].get("message", {}).get("content", "").strip()
+    result = execute_llm_request(url, payload, headers, timeout=40)
+    choices = result.get("choices", [])
+    if choices:
+        return choices[0].get("message", {}).get("content", "").strip()
     raise ValueError("Groq returned an empty response")
 
 
@@ -644,14 +636,11 @@ def call_anthropic_translation(text: str, api_key: str, well_name: str = "Well",
         ],
         "temperature": 0.05
     }
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers)
-    with urllib.request.urlopen(req, timeout=35) as response:
-        result = json.loads(response.read().decode("utf-8"))
-        parts = result.get("content", [])
-        text_out = "".join([p.get("text", "") for p in parts if p.get("type") == "text"]).strip()
-        if text_out:
-            return text_out
+    result = execute_llm_request(url, payload, headers, timeout=40)
+    parts = result.get("content", [])
+    text_out = "".join([p.get("text", "") for p in parts if p.get("type") == "text"]).strip()
+    if text_out:
+        return text_out
     raise ValueError("Anthropic returned an empty response")
 
 

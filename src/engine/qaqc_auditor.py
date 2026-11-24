@@ -6,6 +6,7 @@ import difflib
 from typing import List, Dict, Any, Tuple, Optional
 from src.engine.learning_memory import classify_operational_domain
 from src.engine.chronology import parse_raw_timeline
+from src.engine.llm_network import execute_llm_request, detect_provider
 
 # ==============================================================================
 # ELITE SPANISH ENGINEERING AUDIT SYSTEM PROMPT (DeepSeek V3, GPT-4o, Claude 3.5)
@@ -531,24 +532,10 @@ def call_ai_spanish_audit(text: str, api_key: str, provider: str = "auto", well_
     Executes the LLM Lead Well Operations Auditor in Spanish.
     Supports DeepSeek V3, OpenAI, Claude, Groq, and Gemini.
     """
-    prov = provider.lower()
-    k = api_key.strip()
-    
-    # Auto-detect if needed
-    if prov in ("auto", ""):
-        if k.startswith("sk-ant-"):
-            prov = "anthropic"
-        elif k.startswith("gsk_"):
-            prov = "groq"
-        elif k.startswith("sk-") and len(k) <= 36:
-            # DeepSeek keys typically have length 34-35 (sk- followed by 32 hex chars)
-            prov = "deepseek"
-        elif k.startswith("sk-"):
-            prov = "openai"
-        elif k.startswith("AIza"):
-            prov = "gemini"
-        else:
-            prov = "deepseek"
+    k = (api_key or "").strip()
+    if not k:
+        return None
+    prov = detect_provider(k, requested=provider)
 
     # DeepSeek
     if prov == "deepseek":
@@ -567,13 +554,17 @@ def call_ai_spanish_audit(text: str, api_key: str, provider: str = "auto", well_
             "max_tokens": 4096,
             "response_format": {"type": "json_object"}
         }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=headers)
-        with urllib.request.urlopen(req, timeout=35) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            choices = result.get("choices", [])
-            if choices:
-                return parse_audit_json(choices[0].get("message", {}).get("content", ""))
+        try:
+            result = execute_llm_request(url, payload, headers, timeout=40)
+        except RuntimeError as e:
+            if "response_format" in str(e).lower():
+                del payload["response_format"]
+                result = execute_llm_request(url, payload, headers, timeout=40)
+            else:
+                raise e
+        choices = result.get("choices", [])
+        if choices:
+            return parse_audit_json(choices[0].get("message", {}).get("content", ""))
 
     # OpenAI
     elif prov == "openai":
@@ -592,13 +583,10 @@ def call_ai_spanish_audit(text: str, api_key: str, provider: str = "auto", well_
             "max_tokens": 4096,
             "response_format": {"type": "json_object"}
         }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=headers)
-        with urllib.request.urlopen(req, timeout=35) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            choices = result.get("choices", [])
-            if choices:
-                return parse_audit_json(choices[0].get("message", {}).get("content", ""))
+        result = execute_llm_request(url, payload, headers, timeout=40)
+        choices = result.get("choices", [])
+        if choices:
+            return parse_audit_json(choices[0].get("message", {}).get("content", ""))
 
     # Groq
     elif prov == "groq":
@@ -617,13 +605,10 @@ def call_ai_spanish_audit(text: str, api_key: str, provider: str = "auto", well_
             "max_tokens": 4096,
             "response_format": {"type": "json_object"}
         }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=headers)
-        with urllib.request.urlopen(req, timeout=35) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            choices = result.get("choices", [])
-            if choices:
-                return parse_audit_json(choices[0].get("message", {}).get("content", ""))
+        result = execute_llm_request(url, payload, headers, timeout=40)
+        choices = result.get("choices", [])
+        if choices:
+            return parse_audit_json(choices[0].get("message", {}).get("content", ""))
 
     return None
 
@@ -687,6 +672,7 @@ def audit_operations_text(raw_text: str, api_key: str = None, provider: str = "a
     # -------------------------------------------------------------
     # 1. AI-POWERED AUDIT (DeepSeek / OpenAI)
     # -------------------------------------------------------------
+    ai_status = {"connected": False, "provider": provider, "engine": "Offline Engine", "error": None}
     if api_key and provider != "none":
         try:
             ai_res = call_ai_spanish_audit(raw_text, api_key=api_key, provider=provider, well_name=well_name)
@@ -699,8 +685,17 @@ def audit_operations_text(raw_text: str, api_key: str = None, provider: str = "a
                 if "learning_tips" in ai_res and isinstance(ai_res["learning_tips"], list):
                     learning_tips.extend(ai_res["learning_tips"])
                 ai_audit_success = True
-        except Exception:
+                ai_status = {"connected": True, "provider": provider, "engine": f"{provider.capitalize()} (V3 / IA en la nube)", "error": None}
+        except Exception as e:
             ai_audit_success = False
+            err_msg = str(e)
+            ai_status = {"connected": False, "provider": provider, "engine": "Offline Contingency", "error": err_msg}
+            findings.append({
+                "agent": "lead-intervention-director",
+                "severity": "CRITICAL",
+                "badge": f"⚠️ ALERTA DE CONEXIÓN CON IA ({provider.upper()})",
+                "message": f"No se pudo consultar el motor de IA en la nube ({provider.upper()}): {err_msg}. Se activó el sistema de reglas petroleras de contingencia local."
+            })
 
     # -------------------------------------------------------------
     # 2. OFFLINE DETERMINISTIC POLISHER (Fallback or Enrichment)
@@ -836,5 +831,6 @@ def audit_operations_text(raw_text: str, api_key: str = None, provider: str = "a
         "visual_diff_html": diff_html,
         "corrected_spanish": corrected_text,
         "agent_findings": findings,
-        "learning_tips": learning_tips
+        "learning_tips": learning_tips,
+        "ai_status": ai_status
     }

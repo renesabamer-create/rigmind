@@ -9,12 +9,16 @@ from src.engine.chronology import parse_raw_timeline
 from src.engine.qaqc_auditor import audit_operations_text
 from src.engine.learning_memory import calculate_maturity_score, save_to_memory, load_memory
 from src.engine.translator import translate_to_iadc_english
+from src.engine.llm_network import test_ai_provider_connection, detect_provider
 
 app = FastAPI(title="RigMind - Smart Well Intervention & Workover Suite")
 
 API_KEY_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", ".api_key")
 
 def load_server_api_key():
+    for env_k in ["DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY"]:
+        if os.environ.get(env_k) and "0123456789" in os.environ[env_k]:
+            del os.environ[env_k]
     if os.path.exists(API_KEY_FILE):
         try:
             with open(API_KEY_FILE, "r", encoding="utf-8") as f:
@@ -24,22 +28,29 @@ def load_server_api_key():
                         provider, k = content.split(":", 1)
                     else:
                         provider, k = "auto", content
-                    if provider == "deepseek" or (len(k) == 32 and not k.startswith("AIza")):
-                        os.environ["DEEPSEEK_API_KEY"] = k
-                    elif provider == "openai":
-                        os.environ["OPENAI_API_KEY"] = k
-                    elif provider == "anthropic":
-                        os.environ["ANTHROPIC_API_KEY"] = k
-                    elif provider == "groq":
-                        os.environ["GROQ_API_KEY"] = k
-                    else:
-                        os.environ["GEMINI_API_KEY"] = k
+                    k = k.strip()
+                    if k and "0123456789" not in k:
+                        prov = detect_provider(k, requested=provider)
+                        if prov == "deepseek":
+                            os.environ["DEEPSEEK_API_KEY"] = k
+                        elif prov == "openai":
+                            os.environ["OPENAI_API_KEY"] = k
+                        elif prov == "anthropic":
+                            os.environ["ANTHROPIC_API_KEY"] = k
+                        elif prov == "groq":
+                            os.environ["GROQ_API_KEY"] = k
+                        else:
+                            os.environ["GEMINI_API_KEY"] = k
         except Exception:
             pass
 
 load_server_api_key()
 
 class ApiKeyConfigRequest(BaseModel):
+    api_key: str
+    provider: Optional[str] = "auto"
+
+class TestApiKeyRequest(BaseModel):
     api_key: str
     provider: Optional[str] = "auto"
 
@@ -66,29 +77,38 @@ class SaveMemoryRequest(BaseModel):
 async def get_api_key_status():
     return {"has_key": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY"))}
 
+@app.post("/api/config/test-api-key")
+async def api_test_key(req: TestApiKeyRequest):
+    key = req.api_key.strip()
+    if not key:
+        return JSONResponse({"success": False, "error": "La clave no puede estar vacía."}, status_code=400)
+    res = test_ai_provider_connection(key, provider=req.provider or "auto")
+    return res
+
 @app.post("/api/config/api-key")
 async def save_api_key(req: ApiKeyConfigRequest):
     key = req.api_key.strip()
     if not key:
         return JSONResponse({"error": "La clave no puede estar vacía."}, status_code=400)
     provider = req.provider or "auto"
-    if provider == "deepseek" or (provider == "auto" and (len(key) == 32 and not key.startswith("AIza"))):
+    prov = detect_provider(key, requested=provider)
+    if prov == "deepseek":
         os.environ["DEEPSEEK_API_KEY"] = key
-    elif provider == "openai" or (provider == "auto" and key.startswith("sk-") and not key.startswith("sk-ant-")):
+    elif prov == "openai":
         os.environ["OPENAI_API_KEY"] = key
-    elif provider == "anthropic" or (provider == "auto" and key.startswith("sk-ant-")):
+    elif prov == "anthropic":
         os.environ["ANTHROPIC_API_KEY"] = key
-    elif provider == "groq" or (provider == "auto" and key.startswith("gsk_")):
+    elif prov == "groq":
         os.environ["GROQ_API_KEY"] = key
     else:
         os.environ["GEMINI_API_KEY"] = key
     try:
         os.makedirs(os.path.dirname(API_KEY_FILE), exist_ok=True)
         with open(API_KEY_FILE, "w", encoding="utf-8") as f:
-            f.write(f"{provider}:{key}")
+            f.write(f"{prov}:{key}")
     except Exception as e:
         return JSONResponse({"error": f"Error al guardar la clave: {str(e)}"}, status_code=500)
-    return {"status": "ok", "has_key": True, "provider": provider}
+    return {"status": "ok", "has_key": True, "provider": prov}
 
 @app.delete("/api/config/api-key")
 async def delete_api_key():
@@ -136,6 +156,7 @@ async def api_audit(req: AuditRequest):
         "agent_findings": audit_result["agent_findings"],
         "learning_tips": audit_result["learning_tips"],
         "maturity": maturity_result,
+        "ai_status": audit_result.get("ai_status", {}),
         "preflight": {
             "is_24_closed": chrono_result.get("is_24_closed", False),
             "total_duration": chrono_result.get("total_duration", 0.0),
@@ -746,6 +767,7 @@ async def index():
     <script>
         window.latestAuditData = null;
         window.isDiffMode = false;
+        var isDiffMode = false;
         let inMemoryApiKey = '';
         let inMemoryProvider = 'auto';
 
@@ -821,6 +843,7 @@ async def index():
                             <span style="font-size:0.75rem; color:#34D399; font-weight:600; display:flex; align-items:center; gap:5px;">
                                 <span>🔒</span> <span>${providerLabel} (******)</span>
                             </span>
+                            <button type="button" class="btn-vault-action" onclick="window.testApiKeyClient()" title="Probar conexión en vivo con la API">🧪 Probar</button>
                             <button type="button" class="btn-vault-action" onclick="window.changeApiKey()" title="Cambiar clave o proveedor">⚙️ Cambiar</button>
                         </div>
                     `;
@@ -852,7 +875,7 @@ async def index():
                                 onkeydown="if(event.key==='Enter') window.saveApiKeyClient()"
                                 style="width:140px; letter-spacing:1px;"
                             >
-                            <button type="button" class="btn-vault-save" onclick="window.saveApiKeyClient()" title="Guardar Clave de IA">💾</button>
+                            <button type="button" class="btn-vault-save" onclick="window.saveApiKeyClient()" title="Probar y Guardar Clave de IA">💾</button>
                         </div>
                     `;
                 }
@@ -862,6 +885,7 @@ async def index():
         async function saveApiKeyClient() {
             const input = document.getElementById('secureApiKeyInput');
             const provSelect = document.getElementById('providerSelect');
+            const saveBtn = document.querySelector('.btn-vault-save');
             if (!input) return;
             const key = input.value.trim();
             if (!key) {
@@ -874,10 +898,33 @@ async def index():
                 provider = detectProviderFromKey(key);
             }
 
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.innerText = '⏳';
+            }
+
+            // Probar conexión real con el proveedor antes de guardar
+            try {
+                const testRes = await fetch('/api/config/test-api-key', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_key: key, provider: provider })
+                });
+                const testData = await testRes.json();
+
+                if (!testData.success) {
+                    if (saveBtn) { saveBtn.disabled = false; saveBtn.innerText = '💾'; }
+                    alert(`❌ Error al conectar con ${provider.toUpperCase()}:\n\n${testData.error}\n\nPor favor revise que la clave esté completa y que su cuenta tenga saldo o créditos activos.`);
+                    return;
+                }
+            } catch (err) {
+                console.warn("Probe request failed:", err);
+            }
+
             // Guardar inmediatamente en los 3 niveles del cliente
             setClientApiKey(key, provider);
 
-            // Actualizar UI INMEDIATAMENTE al estado blindado/conectado
+            // Actualizar UI al estado blindado/conectado
             renderApiVault();
 
             // Notificar al servidor en segundo plano
@@ -891,7 +938,46 @@ async def index():
                 console.warn("Sync error:", e);
             }
 
-            alert('🔒 ¡API Key configurada exitosamente! Se ha guardado en su navegador y servidor de manera blindada. Ahora puede procesar cualquier reporte con auditoría de ingeniería y traducción IADC.');
+            alert(`✅ ¡Conexión con ${provider.toUpperCase()} VERIFICADA exitosamente!\n\nSu API Key está activa y probada en tiempo real. Ahora puede auditar y traducir con IA.`);
+        }
+
+        async function testApiKeyClient() {
+            const key = getClientApiKey();
+            const provider = getClientProvider();
+            if (!key) {
+                alert('No hay ninguna clave de API configurada actualmente.');
+                return;
+            }
+
+            const rigBadge = document.getElementById('rigStatusBadge');
+            if (rigBadge) rigBadge.innerText = '⏳ Probando conexión...';
+
+            try {
+                const t0 = performance.now();
+                const res = await fetch('/api/config/test-api-key', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_key: key, provider: provider })
+                });
+                const data = await res.json();
+                const latency = Math.round(performance.now() - t0);
+
+                if (data.success) {
+                    if (rigBadge) {
+                        rigBadge.className = 'badge badge-emerald';
+                        rigBadge.innerText = `🟢 ${data.provider.toUpperCase()} Conectado (${latency}ms)`;
+                    }
+                    alert(`✅ ¡Conexión ACTIVA y VERIFICADA con ${data.provider.toUpperCase()}!\n\nModelo: ${data.model}\nLatencia: ${latency} ms\nEstado: Conectado y listo para auditar y traducir.`);
+                } else {
+                    if (rigBadge) {
+                        rigBadge.className = 'badge badge-crimson';
+                        rigBadge.innerText = `🔴 ${provider.toUpperCase()} Error`;
+                    }
+                    alert(`❌ Error al verificar la conexión con ${provider.toUpperCase()}:\n\n${data.error}\n\nHaga clic en '⚙️ Cambiar' para ingresar una clave válida.`);
+                }
+            } catch (err) {
+                alert(`❌ Error de red al probar la clave: ${err.message}`);
+            }
         }
 
         function changeApiKey() {
@@ -1006,6 +1092,16 @@ async def index():
                 } else {
                     balBadge.className = 'badge badge-amber';
                     document.getElementById('gapNoticeText').innerText = '⚠️ Diferencia de ' + data.chronology.variance_hours + ' h';
+                }
+
+                // AI Engine Indicator in Status Notice
+                const noticeText = document.getElementById('gapNoticeText');
+                if (data.ai_status && noticeText) {
+                    if (data.ai_status.connected) {
+                        noticeText.innerHTML += ` &nbsp;|&nbsp; <span style="color:#34D399; font-weight:700;">⚡ IA Activa: ${data.ai_status.engine}</span>`;
+                    } else if (clientKey && data.ai_status.error) {
+                        noticeText.innerHTML += ` &nbsp;|&nbsp; <span style="color:var(--amber); font-weight:700;" title="${data.ai_status.error}">⚠️ IA No Conectó (${data.ai_status.error.substring(0, 45)}...)</span>`;
+                    }
                 }
 
                 // 2. Populate Caja 2 (Editor interactivo y Diff)
@@ -1129,12 +1225,14 @@ async def index():
                 if (diffBox) diffBox.style.display = 'block';
                 if (toggleBtn) toggleBtn.innerText = '✏️ Modo Editor';
                 window.isDiffMode = true;
+                isDiffMode = true;
             } else {
                 // Show Editor
                 if (editor) editor.style.display = 'block';
                 if (diffBox) diffBox.style.display = 'none';
                 if (toggleBtn) toggleBtn.innerText = '🔍 Ver Diff';
                 window.isDiffMode = false;
+                isDiffMode = false;
             }
         }
 
@@ -1221,6 +1319,7 @@ async def index():
         window.toggleDiffMode = toggleDiffMode;
         window.focusNextPlaceholder = focusNextPlaceholder;
         window.saveApiKeyClient = saveApiKeyClient;
+        window.testApiKeyClient = testApiKeyClient;
         window.changeApiKey = changeApiKey;
         window.renderApiVault = renderApiVault;
 
