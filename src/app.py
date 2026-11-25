@@ -318,18 +318,20 @@ async def index():
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RigMind | Asistente de reportes de pozo</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=7">
+    <link rel="shortcut icon" href="/static/favicon.svg?v=7">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;600;700&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/app.css?v=6">
+    <link rel="stylesheet" href="/static/app.css?v=7">
 </head>
 <body>
 
     <!-- TOP TELEMETRY BAR -->
     <header>
         <div class="logo-area">
-            <span style="font-size:1.6rem">🧠</span>
+            <img src="/static/favicon.svg?v=7" alt="RigMind" class="brand-logo">
             <div>
-                <div class="logo-title">RigMind <span style="font-size:0.75rem; color:var(--text-muted); font-weight:400">· Asistente de reportes</span></div>
+                <div class="logo-title"><span class="brand-rig">Rig</span><span class="brand-mind">Mind</span> <span style="font-size:0.75rem; color:var(--text-muted); font-weight:400">· Asistente de reportes</span></div>
                 <div style="font-size:0.7rem; color:var(--text-muted)">Audita un lapso, completa el reporte, traduce a inglés de operaciones</div>
             </div>
             <span class="badge badge-amber" id="rigStatusBadge">Reglas locales</span>
@@ -492,7 +494,7 @@ async def index():
 
     </div>
 
-    <script src="/static/app.js?v=6"></script>
+    <script src="/static/app.js?v=7"></script>
 </body>
 </html>"""
     return HTMLResponse(

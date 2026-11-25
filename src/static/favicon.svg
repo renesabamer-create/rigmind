@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="rmBorder" x1="10" y1="10" x2="118" y2="118" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#00D2B4"/>
+      <stop offset="55%" stop-color="#34D399"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+    <linearGradient id="rmBrain" x1="24" y1="26" x2="104" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#00E5C3"/>
+      <stop offset="100%" stop-color="#00B4D8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Squircle base -->
+  <rect x="6" y="6" width="116" height="116" rx="26" fill="#0B0F14" stroke="url(#rmBorder)" stroke-width="5"/>
+
+  <!-- Cerebro izquierdo (trazo grueso legible en 16x16) -->
+  <path d="M60 33 C51 25, 37 28, 35 39 C26 41, 22 52, 27 60 C21 68, 25 81, 35 83 C37 94, 51 98, 60 90"
+        stroke="url(#rmBrain)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M36 48 C41 48, 44 52, 43 57 M33 70 C39 70, 42 74, 41 79"
+        stroke="url(#rmBrain)" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Cerebro derecho -->
+  <path d="M68 33 C77 25, 91 28, 93 39 C102 41, 106 52, 101 60 C107 68, 103 81, 93 83 C91 94, 77 98, 68 90"
+        stroke="url(#rmBrain)" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M92 48 C87 48, 84 52, 85 57 M95 70 C89 70, 86 74, 87 79"
+        stroke="url(#rmBrain)" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Check de auditoría en la cima -->
+  <path d="M55 37 L61.5 43.5 L75 30"
+        stroke="#F59E0B" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Torre de intervención en ámbar -->
+  <path d="M56 50 H72 M50 88 L58 50 M78 88 L70 50 M46 88 H82 M64 50 V88 M55 66 L73 66 M53 76 L75 76"
+        stroke="#F59E0B" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
