@@ -1,61 +1,144 @@
-# PetroReports Suite 🛢️
-## Well Intervention, Workover & Completions (IADC Reporting & Learning System)
+# RigMind — Asistente de reportes de pozo
 
-Aplicación de ingeniería de petróleos para la auditoría, control de cambios pedagógico, recomendaciones QA/QC multiespecialista y traducción estandarizada IADC de reportes de intervención de pozos.
+Herramienta **personal** para auditar, completar y traducir el reporte de una operación
+de pozo que cubre un lapso de tiempo (un turno, media jornada o el día completo).
 
----
-
-### 1. Inicio Rápido (En 1 Clic)
-
-- **Opción A (Fácil)**: Haga doble clic en el archivo [`INICIAR_APP.bat`](file:///c:/Users/renes/OneDrive/Escritorio/FEC/APP%20Reportes/INICIAR_APP.bat).
-- **Opción B (Terminal)**:
-  ```bash
-  python run_app.py
-  ```
-
-Una vez iniciada:
-* **En su PC**: Abra su navegador en [http://localhost:8000](http://localhost:8000).
-* **En su Celular**: Conéctese al mismo Wi-Fi del pozo o campamento e ingrese a la dirección IP local mostrada en la consola (ej. `http://192.168.1.XX:8000`).
+```
+Caja 1  pego el reporte crudo (español, el lapso que sea)
+Caja 2  auditoría: corrige lo demostrable, marca lo que falta completar
+Caja 3  hallazgos con evidencia (línea + cita + norma) y checklist por operación
+Caja 4  traducción a inglés de operaciones con las siglas de la industria
+```
 
 ---
 
-### 2. El Flujo de las 4 Cajas
+## 1. Arranque
 
-1. **Caja 1: Entrada Cruda (Español)**
-   - Pegue el reporte de campo o notas de WhatsApp.
-   - Cuenta con botón para cargar el ejemplo real de **Yopo-1** con 1 clic.
-   - Suma y concilia automáticamente las 24 horas del día.
-2. **Caja 2: Control de Cambios & Aprendizaje (Diff Visual)**
-   - Resalta en rojo tachado (`<s>...</s>`) los errores (fechas imposibles como 31/11, cálculos erróneos como 146 ft vs. 416 ft, o jerga informal).
-   - Resalta en verde (`<b>...</b>`) la corrección técnica propuesta.
-   - Incluye tarjetas con **lecciones de ingeniería** para elevar sus hábitos de reporte.
-   - Botón `[✔️ Aplicar a Caja 1]` para sincronizar el texto corregido.
-3. **Caja 3: Auditoría QA/QC de los 7 Agentes**
-   - Muestra las alertas de los especialistas:
-     - 🟢 **Tally & Mecánica**: Sobretensión, holguras de drift, velocidades en ft/hr.
-     - 🔴 **Fluidos & Cemento**: Espesores reales y balance hidrostático de tapones.
-     - 🟡 **PCE / Wireline**: Pruebas de lubricadores y 100% detonación.
-     - 🟣 **Levantamiento Artificial (BES/Varillas/Gas Lift)**: Aislamiento Megger y recuento de partes.
-     - 🟠 **HSE & NPT**: Clasificación de tormentas y eventos de seguridad IADC.
-     - 🏆 **Director Líder**: Integridad de barreras bajo NORSOK D-010.
-4. **Caja 4: Traducción IADC Oficial (Inglés)**
-   - Narrativa ejecutiva con siglas internacionales (`POOH`, `RIH`, `HMBP`, `WOC`, `PUW`, `SOW`, etc.).
-   - Botón `[📋 Copiar al Portapapeles]` para pegar en OpenWells, DIMS o en su correo.
-   - Botón `[⭐ Guardar en Memoria]` para que el sistema aprenda su estándar preferido.
+```bash
+pip install -r requirements.txt
+python run_app.py
+```
+
+Abra <http://localhost:8000>. Por defecto el servidor escucha **solo en este computador**.
+Para usarlo desde el celular en la misma red: `python run_app.py --lan` (queda sin
+autenticación: úselo solo en una red de confianza).
+
+También puede usar `INICIAR_APP.bat`.
 
 ---
 
-### 3. Memoria de Aprendizaje & Nivel de Madurez (0% a 100%)
+## 2. Qué hace la auditoría (Caja 2 y 3)
 
-- La barra superior mide el nivel técnico del reporte:
-  - **Nivel 1 (Básico)**: Diámetro y peso.
-  - **Nivel 2 (Estándar)**: + Rosca y Grado de acero (L-80 / N-80).
-  - **Nivel 3 (Élite Internacional)**: + Rango 2, Box x Pin, velocidades y presiones.
-- La memoria local se guarda en [`data/learning_memory.json`](file:///c:/Users/renes/OneDrive/Escritorio/FEC/APP%20Reportes/data/learning_memory.json).
+**Lapso, no 24 horas forzadas.** Usted define el rango (`Desde` – `Hasta`). La app calcula
+la cobertura real, detecta huecos y operaciones solapadas, y avisa si el reporte empieza
+después del inicio del lapso (informativo, no error).
+
+**Errores demostrables, corregidos en el texto y con evidencia:**
+
+| Verificación | Ejemplo |
+|---|---|
+| Espesor de tapón | 5720 − 5331 = 389 ft, no 146 ft |
+| Avance de juntas | 4/150 jtas = 2.7 %, no 5.0 % |
+| Cargas de rig move | 3/4 cargas = 75 % |
+| Unidades | “68000 klbs” → 68 klb (68,000 lb) |
+| Prueba en baja (API 53) | 250–350 psi y mínimo 5 min |
+| Fechas | 31/11 no existe: se señala, **no se inventa** la fecha |
+| Sacos vs volumen | bbl × 5.615 / rendimiento ≈ sx |
+| Contexto del pozo | profundidad > PBTD, prueba > rating del BOP |
+
+Cada hallazgo trae: gravedad, mensaje, **línea y cita**, norma o práctica aplicable y la
+corrección sugerida.
+
+**Completitud por operación.** Detecta la maniobra principal de cada bloque horario
+(POOH, RIH, HMBP, tapón de cemento, prueba de BOP, circulación, wireline, rig move, ESP,
+NPT, charla de seguridad, wellhead) y exige los parámetros que un revisor pediría.
+Los eventos consecutivos de la misma maniobra se agrupan (sentar el HMBP y luego
+liberarlo/probarlo cuentan como una sola operación).
+
+Solo los campos **obligatorios** faltantes se marcan dentro del texto como
+`[completar: ...]`; los recomendados quedan en el checklist para no ensuciar el reporte.
+
+**Sugerencias de redacción** para frases vacías (“se continúa con las operaciones”,
+“varios”, “aprox.”, “ok” suelto).
 
 ---
 
-### 4. Conectividad IA (Modo Híbrido)
+## 3. Traducción (Caja 4)
 
-- **Modo Offline (Sin Internet)**: Funciona de inmediato sin necesidad de API Key, utilizando el motor de reglas petroleras locales de alta precisión.
-- **Modo Google Gemini (En la Nube)**: Si desea activar el modelo más avanzado, haga clic en el botón `[🔑 API Key]` en la barra superior y pegue su clave gratuita de Google AI Studio.
+- Usa el glosario ES→EN incluido en el prompt (POOH, RIH, HMBP, WOC, TOC, PJSM, MLE,
+  superbandas, carta Barton, etc.).
+- Después de traducir **verifica objetivamente**: español residual, pares número+unidad
+  conservados y siglas estándar presentes. No dice “certificado”: dice qué encontró.
+- Si la IA falla o no hay clave, entrega un **borrador offline marcado** (diccionario local,
+  mezcla inglés y español) y lo advierte. Nunca sustituye en silencio.
+
+Proveedores: DeepSeek, OpenAI, Anthropic, Groq y Gemini. La clave se guarda en
+`%LOCALAPPDATA%\RigMind\api_key` (fuera de OneDrive) y no se muestra en la interfaz.
+
+---
+
+## 4. Historial y entrega
+
+- **💾 Guardar**: archiva el reporte (pozo, fecha, lapso, español, inglés, hallazgos y
+  completitud) en `data/rigmind.db` (SQLite local). El selector **Historial** del encabezado
+  reabre cualquier turno anterior.
+- **⬇ Word / ⬇ Excel**: descarga el DOR con encabezado, tabla de hallazgos con evidencia y
+  norma, texto en español y texto en inglés. El Excel agrega hojas de operaciones y hallazgos.
+- El archivo exportado incluye la nota de que es un borrador que requiere revisión y firma.
+
+---
+
+## 5. Pruebas
+
+```bash
+python tests/run_tests.py     # sin dependencias
+# o: python -m pytest -q
+```
+
+Cubren cronología (huecos, solapes, medianoche), aritmética, completitud agrupada,
+escape de HTML y verificación de traducción.
+
+---
+
+## 6. Estructura
+
+```
+run_app.py                  arranque local (--lan opcional)
+src/app.py                  API FastAPI + shell HTML
+src/static/app.js|app.css   interfaz
+src/engine/period.py        lapso: eventos, cobertura, huecos, solapes
+src/engine/completeness.py  operaciones y parámetros exigidos
+src/engine/text_rules.py    glosario, tipeo, números+unidades, español residual
+src/engine/auditor.py       orquestador, aritmética, evidencia, diff
+src/engine/qaqc_auditor.py  llamada al LLM auditor (multi-proveedor)
+src/engine/translator.py    traducción + verificación
+src/engine/store.py         historial SQLite (data/rigmind.db)
+src/engine/export.py        exportación .docx / .xlsx
+src/engine/llm_network.py   HTTP/SSL hacia los proveedores
+tests/                      pruebas del motor
+data/well_profiles.json     BOP, drift y PBTD por pozo (validación)
+.agents/                    documentación de roles para el asistente de código (no se ejecuta)
+```
+
+---
+
+## 7. Límites conocidos (dichos de frente)
+
+- El motor determinista cubre las operaciones más comunes. Una maniobra poco frecuente
+  puede no tener checklist propio; en ese caso solo se revisan cronología, aritmética y
+  encabezado.
+- La detección de operación es por lenguaje: si el reporte está muy abreviado o en otro
+  idioma, el checklist puede no activarse.
+- El borrador offline **no es un DOR**: es un apoyo para no perder el trabajo.
+- La app no entrega el formato propietario de OpenWells/WellView; exporta `.docx`/`.xlsx` estándar.
+- La revisión humana sigue siendo obligatoria. La herramienta señala y demuestra; no firma.
+
+---
+
+## 8. Siguientes pasos sugeridos
+
+1. Ampliar checklists: pesca/molinenda, squeeze, coiled tubing y snubbing.
+2. Exportar la tabla de operaciones al formato que pida la operadora (además del DOR genérico).
+3. Aprender de sus correcciones (comparar lo que usted editó en la Caja 2 con lo auditado).
+4. Banco de reportes reales anonimizados para medir precisión y falsos positivos.
+5. Adjuntar fotos/anexos del turno al reporte guardado.

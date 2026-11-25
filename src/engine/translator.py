@@ -2,60 +2,39 @@ import os
 import re
 import urllib.request
 import json
+from collections import Counter
 from typing import Dict, Any, Tuple, List
+
 from src.engine.llm_network import execute_llm_request, detect_provider
+from src.engine.learning_memory import select_relevant_examples
+from src.engine.text_rules import (
+    ACRONYMS,
+    GLOSSARY,
+    extract_number_units,
+    spanish_residue,
+)
 
 # ==============================================================================
-# ELITE IADC / SPE PROMPT SPECIFICATION (Gemini 3.5 & Multimodal Engines)
+# PROMPT DE TRADUCCIÓN (IADC/SPE) + glosario obligatorio
 # ==============================================================================
 
-ELITE_IADC_SYSTEM_PROMPT = """You are the Senior Lead Petroleum Engineer and Chief IADC/SPE Technical Translator & QA/QC Auditor.
-Your mission is to transform raw Spanish well intervention, workover, completion, and well abandonment (P&A) field notes into 100% rigorous, professional, standardized IADC/SPE English narratives.
+MODELS_GEMINI = ["gemini-flash-latest", "gemini-2.5-flash"]
+
+ELITE_IADC_SYSTEM_PROMPT = """You are a Senior Petroleum Engineer and IADC/SPE technical translator for well intervention, workover, completions and P&A daily operations reports.
 
 MANDATORY DIRECTIVES:
-1. STRICT ZERO-OMISSION PROTOCOL: You must translate EVERY SINGLE SENTENCE, CLAUSE, NUMBER, UNIT, SERIAL NUMBER, AND DETAIL without exception. NEVER summarize, synthesize, shorten, condense, or drop operations. If an entry describes multiple actions (e.g. tensioning string, rotating right-hand, observing loss of tension, pulling free w/o overpull, forward circulating until full, closing pipe rams, pressure testing HMBP, recording on Barton chart), EVERY SINGLE ACTION MUST appear in the final English narrative with 1:1 completeness.
-2. OUTPUT ONLY THE TRANSLATED TEXT: Do NOT include greetings, intro phrases, bullet commentary, or options.
-3. ZERO SPANGLISH: Every Spanish word, verb, preposition, and colloquialism MUST be completely converted to natural petroleum engineering English. Never output phrases like "toma of alimentos", "pup joi t", "corte of cable", or "conexiones of lineas".
-4. STANDARD IADC ABBREVIATIONS: Enforce standard abbreviations where appropriate:
-   - POOH (Pulled Out Of Hole)
-   - RIH (Ran In Hole)
-   - M/U (Made Up)
-   - B/O (Broke Out)
-   - L/D (Laid Down)
-   - N/U (Nippled Up)
-   - N/D (Nippled Down)
-   - R/U (Rigged Up)
-   - R/D (Rigged Down)
-   - WOC (Waiting On Cement)
-   - HMBP (Hydro-Mechanical Bridge Plug)
-   - BPV (Back Pressure Valve)
-   - PJSM (Pre-Job Safety Meeting)
-   - PUW (Pick-Up Weight), SOW (Slack-Off Weight), ROTW (Rotating Weight)
-5. TYPOS & FIELD SLANG NORMALIZATION:
-   - "pup joi t" / "pup joint de manejo" -> "handling pup joint"
-   - "llaves hidraulicas" -> "hydraulic power tongs"
-   - "choque" / "manifold de choque" -> "choke manifold"
-   - "xequipos" / "sus equipos" -> "third-party surface equipment" (e.g., Novomet ESP surface equipment)
-   - "circulacion en directa" -> "forward circulation"
-   - "circulacion en reversa" -> "reverse circulation"
-   - "pulling" -> "POOH / pulling tubing string"
-   - "tensiono con X klbs" -> "pulled tension to X klb"
-   - "corte de cable" -> "cut ESP power cable"
-   - "personal toma de alimentos y descanso" -> "Crew meal and rest break"
-   - "reunion preoperacional" -> "Held pre-job safety meeting (PJSM)"
-   - "check list diario" -> "conducted daily tool and equipment inspection"
-   - "carta barton" / "carta bartón" -> "Barton round pressure chart recorder"
-   - "toque de TOC" / "verifico TOC con 10 klb" -> "tagged TOC w/ 10 klb"
-6. PRESERVE NUMERICAL DATA & TIMELINES EXACTLY: Keep the exact hours (e.g. '00:00 - 01:00') and all weights, depths, pressures, and volumes.
-7. CLEAN HANDLING OF INLINE PLACEHOLDERS: If the Spanish narrative contains uncompleted bracketed placeholders (such as '[___ bpm]', '[TOTAL JTS]', '[SWD: ___ klb]', or '[especificar ...]'), preserve the brackets with natural English field labels (e.g. '[TOTAL JTS]', '[specify BHA type / objective: e.g. fishing / completion]', '[SWD: ___ klb]', '[___ bpm]') or omit placeholder instructions if actual engineering values have already been filled in. Never leave raw Spanish words inside bracketed engineering placeholders."""
+1. ZERO OMISSION: translate EVERY sentence, clause, number, unit, depth, pressure, volume, time and action. Never summarize, shorten or drop an operation. If one entry has several actions, every action must appear in English.
+2. OUTPUT ONLY THE TRANSLATED TEXT: no greetings, no commentary, no bullet options.
+3. ZERO SPANGLISH: every Spanish word, verb and preposition must become natural petroleum engineering English. Never output "toma of alimentos", "corte of cable", "conexiones of lineas", "bajo tension", "circulo pildora".
+4. STANDARD IADC ACRONYMS: POOH (Pulled Out Of Hole), RIH (Ran In Hole), M/U (Made Up), B/O (Broke Out), L/D (Laid Down), N/U (Nippled Up), N/D (Nippled Down), R/U (Rigged Up), R/D (Rigged Down), R/M (Rig Move), WOC (Waiting On Cement), HMBP (Hydro-Mechanical Bridge Plug), PJSM (Pre-Job Safety Meeting), PUW (Pick-Up Weight), SOW (Slack-Off Weight), ROTW (Rotating Weight).
+5. TERMINOLOGY: use the glossary below exactly; do not invent synonyms for standardized terms.
+6. PRESERVE NUMBERS AND TIMELINES EXACTLY: keep every HH:MM range, every psi, bbl, bpm, ppg, klb, ft, lb/ft, jts, %, °F and min. Do not convert units.
+7. INCOMPLETE FIELDS: the Spanish text may contain markers like "[completar: SWD, velocidad]". Translate the label, keep it bracketed and readable, e.g. "[complete: SWD, speed]". Never leave Spanish words inside a bracket.
+8. NEVER ADD information that is not in the Spanish text, and never remove a bracketed marker.
 
-MODELS_CASCADE = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-3.8-flash",
-    "gemini-3.1-flash-lite",
-    "gemini-flash-latest"
-]
+GLOSSARY (Spanish -> mandatory English):
+""" + "\n".join(f"- {es} -> {en}" for es, en in GLOSSARY)
+
 
 # ==============================================================================
 # MASTER PETROLEUM TRANSLATION ENGINE (Offline High-Accuracy IADC Rulebook)
@@ -442,74 +421,113 @@ def offline_standardized_translation(text: str) -> str:
 # AGENT #10: IADC / SPE TRANSLATION QA/QC AUDITOR
 # ==============================================================================
 
+# Conceptos cuya sigla debe aparecer en inglés si el español los menciona
+CONCEPT_ACRONYMS: List[Tuple[str, str]] = [
+    ("POOH", r"\bpooh\b|sac(?:a|ó|ando|ar)\s+tuber|pulling"),
+    ("RIH", r"\brih\b|baj(?:a|ó|ando|ar)\s+tuber|corrida\s+de\s+tuber"),
+    ("HMBP", r"\bhmbp\b|bridge\s*plug"),
+    ("WOC", r"\bwoc\b|fraguado"),
+    ("TOC", r"\btoc\b|toque\s+de\s+cemento"),
+    ("BHA", r"\bbha\b"),
+    ("PCE", r"\bpce\b|lubricador"),
+    ("CCL", r"\bccl\b|correlaci[oó]n"),
+    ("ESP", r"\besp\b|\bbes\b|electrosumergible"),
+    ("MLE", r"\bmle\b|mls\s+joints"),
+    ("R/U", r"\br/u\b|\barme\b"),
+    ("R/D", r"\br/d\b|desarme"),
+    ("R/M", r"\br/m\b|movilizaci[oó]n"),
+    ("PJSM", r"\bpjsm\b|charla|reuni[oó]n\s+preoperacional"),
+    ("NPT", r"\bnpt\b|tormenta"),
+]
+
+_NOTICE_SPLIT = re.compile(r"^-{2,}\s*\[BORRADOR.*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _translated_body(text: str) -> str:
+    """Quita el aviso en español del modo offline antes de medir la traducción."""
+    m = _NOTICE_SPLIT.search(text or "")
+    return (text[m.end():] if m else (text or "")).strip()
+
+
 def audit_translation_qaqc(english_text: str, spanish_text: str = "") -> Dict[str, Any]:
     """
-    Agent #10 (iadc-translation-qaqc-auditor): Audits the English translation output.
-    Verifies 100% standard oilfield English, detects residual Spanglish,
-    and certifies technical compliance for official IADC reporting.
+    Verificación objetiva de la traducción:
+      - español residual (palabras y verbos, no solo artículos),
+      - paridad de pares número+unidad (no de números sueltos),
+      - siglas exigidas por el contenido del español.
+    No "certifica": reporta qué pasó y qué falta.
     """
-    # Spanish tokens that must NEVER appear in official English reports
-    unwanted_spanish_regex = re.compile(
-        r'\b(del|para|por|alimentos|descanso|conexiones|lineas|tuber[ií]a|manejo|xequipos|sacando|primeras|juntas|tensiono|corte|arme|desarme)\b',
-        re.IGNORECASE
-    )
-    # Spanglish combos (e.g. 'of alimentos', 'corte of')
-    spanglish_combos_regex = re.compile(
-        r'\b(of\s+(?:alimentos|lineas|tuber[ií]a|manejo|equipo|cargas|cemento|acero|los|las|el|la|descanso)|corte\s+of|toma\s+of|pup\s+joi\s*t|pulling\s+pozo)\b',
-        re.IGNORECASE
-    )
+    body = _translated_body(english_text)
+    residues = spanish_residue(body)
 
-    spanish_tokens = unwanted_spanish_regex.findall(english_text)
-    spanglish_combos = spanglish_combos_regex.findall(english_text)
+    es_pairs = extract_number_units(spanish_text)
+    en_pairs = extract_number_units(body)
+    en_counter = Counter(en_pairs)
+    missing_pairs: List[Tuple[str, str]] = []
+    for pair in es_pairs:
+        if en_counter[pair] > 0:
+            en_counter[pair] -= 1
+        else:
+            missing_pairs.append(pair)
+    parity_pct = round(100.0 * (len(es_pairs) - len(missing_pairs)) / len(es_pairs), 1) if es_pairs else 100.0
 
-    findings = []
-    has_spanglish = len(spanish_tokens) > 0 or len(spanglish_combos) > 0
+    expected = [acr for acr, pat in CONCEPT_ACRONYMS if re.search(pat, spanish_text or "", re.IGNORECASE)]
+    present = [acr for acr in expected if re.search(rf"(?<![A-Za-z]){re.escape(acr)}(?![A-Za-z])", body)]
+    missing_acronyms = [acr for acr in expected if acr not in present]
+    acronym_pct = round(100.0 * len(present) / len(expected), 1) if expected else 100.0
 
-    # Numerical and Data Parity Audit (Zero-Omission Verification)
-    spanish_numbers = re.findall(r"\b\d+(?:\.\d+)?\b", spanish_text)
-    english_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", english_text))
-    
-    retained_count = sum(1 for n in spanish_numbers if n in english_numbers)
-    total_nums = len(spanish_numbers)
-    parity_pct = round((retained_count / total_nums) * 100, 1) if total_nums > 0 else 100.0
-
-    if has_spanglish:
-        bad_words = list(set([w.lower() for w in (spanish_tokens + spanglish_combos)]))[:6]
-        quality_score = max(25, 80 - (len(spanish_tokens) * 10))
-        status = "SUBSTANDARD_SPANGLISH"
+    findings: List[Dict[str, Any]] = []
+    if residues:
         findings.append({
-            "agent": "iadc-translation-qaqc-auditor",
-            "severity": "CRITICAL",
-            "badge": "🔴 ALERTA DE TRADUCCIÓN: SPANGLISH DETECTADO",
-            "message": f"El Auditor de Traducción IADC detectó residuos de español/Spanglish en la narrativa ({', '.join(bad_words)}). La traducción requiere revisión del vocabulario técnico antes de exportar a DOR."
+            "agent": "translation-qaqc", "severity": "critical",
+            "badge": "🔴 ESPAÑOL RESIDUAL EN LA TRADUCCIÓN",
+            "message": "Quedaron palabras o verbos en español: " + ", ".join(residues[:12]) + ".",
+            "suggestion": "Vuelva a traducir con IA o corrija esas palabras a mano antes de exportar.",
         })
-    elif total_nums >= 3 and parity_pct < 60.0:
-        quality_score = 65
-        status = "DATA_TRUNCATED"
+    if missing_pairs:
+        shown = ", ".join(f"{v} {u}" for v, u in missing_pairs[:12])
         findings.append({
-            "agent": "iadc-translation-qaqc-auditor",
-            "severity": "WARNING",
-            "badge": "🟡 ALERTA DE PARIDAD: POSIBLE OMISIÓN DE DATOS",
-            "message": f"Se detectó una reducción de parámetros operacionales ({retained_count}/{total_nums} valores numéricos retenidos, {parity_pct}%). Verifique que no se hayan omitido presiones (psi), pesos (klb), vueltas o cotas de profundidad."
+            "agent": "translation-qaqc", "severity": "warning",
+            "badge": "🟠 DATOS NUMÉRICOS NO APARECEN EN INGLÉS",
+            "message": f"{len(missing_pairs)} de {len(es_pairs)} pares número+unidad no se conservaron: {shown}.",
+            "suggestion": "Verifique que ninguna presión, volumen, cota o tiempo se haya omitido.",
         })
+    if missing_acronyms:
+        findings.append({
+            "agent": "translation-qaqc", "severity": "info",
+            "badge": "🔵 SIGLAS ESTÁNDAR NO USADAS",
+            "message": "El español menciona operaciones cuya sigla IADC falta en inglés: " + ", ".join(missing_acronyms) + ".",
+            "suggestion": "Use " + ", ".join(missing_acronyms) + " en la narrativa inglesa.",
+        })
+    if not residues and not missing_pairs:
+        findings.append({
+            "agent": "translation-qaqc", "severity": "success",
+            "badge": "🟢 TRADUCCIÓN VERIFICADA",
+            "message": f"Sin español residual, {parity_pct}% de pares número+unidad conservados y "
+                       f"{len(present)}/{len(expected) or 0} siglas estándar presentes.",
+        })
+
+    if residues:
+        status = "REVISAR_ESPANOL"
+    elif missing_pairs:
+        status = "REVISAR_DATOS"
+    elif missing_acronyms:
+        status = "REVISAR_SIGLAS"
     else:
-        quality_score = 100
-        status = "CERTIFIED_IADC"
-        findings.append({
-            "agent": "iadc-translation-qaqc-auditor",
-            "severity": "SUCCESS",
-            "badge": "🟢 TRADUCCIÓN IADC / SPE CERTIFICADA (PARIDAD 1:1)",
-            "message": f"Auditoría de traducción completada: Cero Spanglish detectado y {parity_pct}% de paridad en datos numéricos ({retained_count}/{total_nums} parámetros validados). Cumple con el Protocolo Estricto de Cero Omisión. Apto para OpenWells / WellView / DOR."
-        })
+        status = "VERIFICADO"
 
     return {
         "status": status,
-        "quality_score": quality_score,
-        "has_spanglish": has_spanglish,
+        "has_spanglish": bool(residues),
         "data_parity_pct": parity_pct,
-        "flagged_tokens": spanish_tokens + spanglish_combos,
-        "findings": findings
+        "acronym_pct": acronym_pct,
+        "flagged_tokens": residues[:20],
+        "missing_numbers": [f"{v} {u}" for v, u in missing_pairs[:20]],
+        "missing_acronyms": missing_acronyms,
+        "numbers_total": len(es_pairs),
+        "findings": findings,
     }
+
 
 
 # ==============================================================================
@@ -518,24 +536,34 @@ def audit_translation_qaqc(english_text: str, spanish_text: str = "") -> Dict[st
 
 def detect_llm_provider(api_key: str, requested_provider: str = "auto") -> str:
     """
-    Intelligently identifies the AI provider by key prefix or explicit request.
+    Identifica el proveedor por la clave o por elección explícita del usuario.
+    Delega en `detect_provider` para no tener dos heurísticas distintas.
     """
     if requested_provider and requested_provider.lower() not in ("auto", "none", ""):
         return requested_provider.lower()
-    if not api_key:
+    if not api_key or not api_key.strip():
         return "none"
-    k = api_key.strip()
-    if k.startswith("sk-ant-"):
-        return "anthropic"
-    elif k.startswith("gsk_"):
-        return "groq"
-    elif k.startswith("sk-") and len(k) <= 36:
-        return "deepseek"
-    elif k.startswith("sk-"):
-        return "openai"
-    elif k.startswith("AIza"):
-        return "gemini"
-    return "deepseek" if len(k) == 32 else "gemini"
+    return detect_provider(api_key, requested="auto")
+
+
+def _translation_user_prompt(text: str, well_name: str) -> str:
+    examples = select_relevant_examples(text, limit=2)
+    ex_block = ""
+    if examples:
+        blocks = []
+        for ex in examples:
+            op = ex.get("operation") or "Operation"
+            es = (ex.get("spanish_exemplar") or "").strip()[:300]
+            en = (ex.get("english_iadc") or "").strip()[:300]
+            if es and en:
+                blocks.append(f"[{op}]\nES: {es}\nEN: {en}")
+        if blocks:
+            ex_block = (
+                "USER-APPROVED REFERENCE EXAMPLES (follow this exact style and acronyms):\n"
+                + "\n---\n".join(blocks)
+                + "\n\n"
+            )
+    return f"{ex_block}Translate these Spanish operational notes for Well '{well_name}':\n\n{text}"
 
 
 def call_deepseek_translation(text: str, api_key: str, well_name: str = "Well", model: str = "deepseek-chat") -> str:
@@ -552,10 +580,10 @@ def call_deepseek_translation(text: str, api_key: str, well_name: str = "Well", 
         "model": model,
         "messages": [
             {"role": "system", "content": ELITE_IADC_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Translate these Spanish operational notes for Well '{well_name}':\n\n{text}"}
+            {"role": "user", "content": _translation_user_prompt(text, well_name)}
         ],
         "temperature": 0.05,
-        "max_tokens": 4096
+        "max_tokens": 8192
     }
     result = execute_llm_request(url, payload, headers, timeout=40)
     choices = result.get("choices", [])
@@ -578,10 +606,10 @@ def call_openai_translation(text: str, api_key: str, well_name: str = "Well", mo
         "model": model,
         "messages": [
             {"role": "system", "content": ELITE_IADC_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Translate these Spanish operational notes for Well '{well_name}':\n\n{text}"}
+            {"role": "user", "content": _translation_user_prompt(text, well_name)}
         ],
         "temperature": 0.05,
-        "max_tokens": 4096
+        "max_tokens": 8192
     }
     result = execute_llm_request(url, payload, headers, timeout=40)
     choices = result.get("choices", [])
@@ -604,10 +632,10 @@ def call_groq_translation(text: str, api_key: str, well_name: str = "Well", mode
         "model": model,
         "messages": [
             {"role": "system", "content": ELITE_IADC_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Translate these Spanish operational notes for Well '{well_name}':\n\n{text}"}
+            {"role": "user", "content": _translation_user_prompt(text, well_name)}
         ],
         "temperature": 0.05,
-        "max_tokens": 4096
+        "max_tokens": 8192
     }
     result = execute_llm_request(url, payload, headers, timeout=40)
     choices = result.get("choices", [])
@@ -629,10 +657,10 @@ def call_anthropic_translation(text: str, api_key: str, well_name: str = "Well",
     }
     payload = {
         "model": model,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "system": ELITE_IADC_SYSTEM_PROMPT,
         "messages": [
-            {"role": "user", "content": f"Translate these Spanish operational notes for Well '{well_name}':\n\n{text}"}
+            {"role": "user", "content": _translation_user_prompt(text, well_name)}
         ],
         "temperature": 0.05
     }
@@ -645,150 +673,113 @@ def call_anthropic_translation(text: str, api_key: str, well_name: str = "Well",
 
 
 def call_gemini_translation(text: str, api_key: str, well_name: str = "Well") -> Tuple[str, str]:
-    """
-    Translates using Google Gemini model cascade with multi-part concatenation.
-    """
-    last_err = None
-    for model in MODELS_CASCADE:
+    """Gemini con dos modelos reales, error explícito por modelo y SSL del módulo de red."""
+    errors: List[str] = []
+    prompt = _translation_user_prompt(text, well_name)
+    for model in MODELS_GEMINI:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key.strip()}"
+        payload = {
+            "system_instruction": {"parts": [{"text": ELITE_IADC_SYSTEM_PROMPT}]},
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.05, "maxOutputTokens": 8192},
+        }
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key.strip()}"
-            payload = {
-                "system_instruction": {
-                    "parts": [{"text": ELITE_IADC_SYSTEM_PROMPT}]
-                },
-                "contents": [
-                    {"parts": [{"text": f"Translate these Spanish operational notes for Well '{well_name}':\n\n{text}"}]}
-                ],
-                "generationConfig": {
-                    "temperature": 0.05,
-                    "maxOutputTokens": 4096
-                }
-            }
-            data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=30) as response:
-                result = json.loads(response.read().decode("utf-8"))
-                candidates = result.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts:
-                        translated = "".join([p.get("text", "") for p in parts if "text" in p]).strip()
-                        if translated:
-                            return translated, f"Gemini ({model})"
+            res = execute_llm_request(url, payload, {"Content-Type": "application/json"}, timeout=60)
         except Exception as e:
-            last_err = e
+            errors.append(f"{model}: {str(e)[:80]}")
             continue
-    raise last_err or ValueError("Google Gemini models unavailable")
+        cands = res.get("candidates", [])
+        if cands:
+            parts = cands[0].get("content", {}).get("parts", [])
+            out = "".join(p.get("text", "") for p in parts if "text" in p).strip()
+            if out:
+                return out, f"Gemini ({model})"
+        errors.append(f"{model}: respuesta vacía")
+    raise RuntimeError("Gemini no respondió — " + " | ".join(errors))
 
 
 # ==============================================================================
-# MAIN TRANSLATION DISPATCHER (Multi-Provider Engine + Transparent Fallback)
+# DISPATCHER
 # ==============================================================================
+
+PROVIDER_LABEL = {
+    "deepseek": "DeepSeek (deepseek-chat)",
+    "openai": "OpenAI (gpt-4o-mini)",
+    "anthropic": "Anthropic (Claude 3.5 Haiku)",
+    "groq": "Groq (Llama 3.3 70B)",
+    "gemini": "Google Gemini (flash)",
+}
+
 
 def translate_to_iadc_english(
-    spanish_text: str, 
-    api_key: str = None, 
+    spanish_text: str,
+    api_key: str = None,
     provider: str = "auto",
     well_name: str = "Well",
-    force_offline: bool = False
+    force_offline: bool = False,
 ) -> Tuple[str, str, Dict[str, Any]]:
     """
-    Translates Spanish field notes to standardized IADC English using the best available AI provider.
-    Supports: OpenAI (GPT-4o), Anthropic Claude, Groq (Llama 3.3) and Google Gemini.
-    Provides complete error transparency: never silently drops to Spanglish without alerting the user.
+    Traduce a inglés IADC. Si hay clave, usa el proveedor elegido y NUNCA
+    sustituye en silencio: si falla, devuelve un borrador marcado y un
+    hallazgo crítico con el error real.
     """
-    effective_key = api_key or os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("GROQ_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    selected_provider = detect_llm_provider(effective_key, requested_provider=provider)
-
-    if not force_offline and effective_key:
-        error_reasons = []
-
-        # 1. DeepSeek Path (State-of-the-art reasoning, ultra cost-effective)
-        if selected_provider == "deepseek":
-            try:
-                translated = call_deepseek_translation(spanish_text, effective_key, well_name=well_name, model="deepseek-chat")
-                qaqc_result = audit_translation_qaqc(translated, spanish_text)
-                return translated, "DeepSeek (V3 / deepseek-chat)", qaqc_result
-            except Exception as e:
-                error_reasons.append(f"DeepSeek error: {str(e)[:80]}")
-
-        # 2. OpenAI Path (Gold standard)
-        elif selected_provider == "openai" or (selected_provider == "auto" and effective_key.startswith("sk-") and not effective_key.startswith("sk-ant-")):
-            try:
-                translated = call_openai_translation(spanish_text, effective_key, well_name=well_name, model="gpt-4o-mini")
-                qaqc_result = audit_translation_qaqc(translated, spanish_text)
-                return translated, "OpenAI (GPT-4o-mini)", qaqc_result
-            except Exception as e:
-                error_reasons.append(f"OpenAI error: {str(e)[:80]}")
-
-        # 3. Anthropic Claude Path
-        elif selected_provider == "anthropic" or effective_key.startswith("sk-ant-"):
-            try:
-                translated = call_anthropic_translation(spanish_text, effective_key, well_name=well_name, model="claude-3-5-haiku-20241022")
-                qaqc_result = audit_translation_qaqc(translated, spanish_text)
-                return translated, "Anthropic (Claude 3.5 Haiku)", qaqc_result
-            except Exception as e:
-                error_reasons.append(f"Anthropic error: {str(e)[:80]}")
-
-        # 4. Groq Path (Llama 3.3 70B)
-        elif selected_provider == "groq" or effective_key.startswith("gsk_"):
-            try:
-                translated = call_groq_translation(spanish_text, effective_key, well_name=well_name, model="llama-3.3-70b-versatile")
-                qaqc_result = audit_translation_qaqc(translated, spanish_text)
-                return translated, "Groq (Llama 3.3 70B)", qaqc_result
-            except Exception as e:
-                error_reasons.append(f"Groq error: {str(e)[:80]}")
-
-        # 5. Google Gemini Path
-        else:
-            try:
-                translated, engine_label = call_gemini_translation(spanish_text, effective_key, well_name=well_name)
-                qaqc_result = audit_translation_qaqc(translated, spanish_text)
-                return translated, engine_label, qaqc_result
-            except Exception as e:
-                error_reasons.append(f"Gemini error (503/Timeout/Capacity): {str(e)[:100]}")
-
-        # If an API key was provided but failed: EXPLICIT USER ALERT (NO SILENT SPANGLISH)
-        err_msg = " | ".join(error_reasons)
-        error_notice = (
-            f"⚠️ [AVISO DE SERVICIO DE IA]:\n"
-            f"No se pudo completar la traducción automática con el proveedor configurado ({selected_provider.upper()}).\n"
-            f"Detalle técnico: {err_msg}\n\n"
-            f"RECOMENDACIÓN TÉCNICA RIGMIND:\n"
-            f"• Los endpoints de Google experimentan sobrecarga temporal (Error 503).\n"
-            f"• Ahora puede usar OpenAI (GPT-4o / GPT-4o-mini), Anthropic Claude o Groq pegando su clave en la barra superior.\n\n"
-            f"--- [BORRADOR DETERMINÍSTICO OFFLINE DE CONTINGENCIA] ---\n"
-            f"(Nota: Este borrador contiene términos pendientes de revisión técnica. No exportar a DOR de la operadora sin validar)\n\n"
-        )
-        offline_draft = offline_standardized_translation(spanish_text)
-        full_text = error_notice + offline_draft
-        qaqc_result = {
-            "status": "AI_SERVICE_UNAVAILABLE",
-            "quality_score": 30,
-            "has_spanglish": True,
-            "data_parity_pct": 50.0,
-            "findings": [{
-                "agent": "iadc-translation-qaqc-auditor",
-                "severity": "CRITICAL",
-                "badge": "🔴 ALERTA: MOTOR IA NO DISPONIBLE (503/TIMEOUT)",
-                "message": f"El servicio de IA ({selected_provider.upper()}) falló con: {err_msg}. Se emitió borrador offline temporal. Configure una clave de OpenAI, Anthropic o Groq para traducción 100% profesional."
-            }]
-        }
-        return full_text, f"Borrador Offline ({selected_provider.upper()} Falló)", qaqc_result
-
-    # Offline translation fallback when no key is configured
-    no_key_notice = (
-        "ℹ️ [MODO BORRADOR OFFLINE - SIN CLAVE DE IA]:\n"
-        "No se detectó API Key en el servidor o navegador.\n"
-        "Para obtener una traducción 100% oficial IADC sin Spanglish, ingrese una API Key de OpenAI (GPT-4o), Anthropic Claude, Groq o Gemini en la barra superior.\n\n"
-        "--- [BORRADOR DETERMINÍSTICO DE CONTINGENCIA] ---\n\n"
+    effective_key = (
+        api_key
+        or os.environ.get("DEEPSEEK_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or os.environ.get("GROQ_API_KEY")
+        or os.environ.get("GEMINI_API_KEY")
     )
-    offline_translated = no_key_notice + offline_standardized_translation(spanish_text)
-    qaqc_result = audit_translation_qaqc(offline_translated, spanish_text)
-    qaqc_result["findings"].insert(0, {
-        "agent": "iadc-translation-qaqc-auditor",
-        "severity": "WARNING",
-        "badge": "🟡 MODO OFFLINE: CLAVE DE IA NO CONFIGURADA",
-        "message": "Traducción generada mediante diccionario offline de contingencia. Ingrese una clave de OpenAI (GPT-4o), Anthropic Claude o Gemini para habilitar el motor de IA profesional."
+    selected = detect_llm_provider(effective_key, requested_provider=provider)
+
+    if not force_offline and effective_key and selected not in ("none", "auto"):
+        callers = {
+            "deepseek": lambda: call_deepseek_translation(spanish_text, effective_key, well_name=well_name),
+            "openai": lambda: call_openai_translation(spanish_text, effective_key, well_name=well_name),
+            "anthropic": lambda: call_anthropic_translation(spanish_text, effective_key, well_name=well_name),
+            "groq": lambda: call_groq_translation(spanish_text, effective_key, well_name=well_name),
+        }
+        try:
+            if selected == "gemini":
+                translated, label = call_gemini_translation(spanish_text, effective_key, well_name=well_name)
+            elif selected in callers:
+                translated, label = callers[selected](), PROVIDER_LABEL[selected]
+            else:
+                raise RuntimeError(f"Proveedor no soportado: {selected}")
+            return translated, label, audit_translation_qaqc(translated, spanish_text)
+        except Exception as e:
+            err = str(e)[:220]
+            notice = (
+                f"⚠️ [IA NO DISPONIBLE — {selected.upper()}]\n"
+                f"Detalle: {err}\n\n"
+                f"--- [BORRADOR OFFLINE — NO USAR COMO DOR FINAL] ---\n\n"
+            )
+            draft = offline_standardized_translation(spanish_text)
+            qaqc = audit_translation_qaqc(draft, spanish_text)
+            qaqc["findings"].insert(0, {
+                "agent": "translation-qaqc", "severity": "critical",
+                "badge": "🔴 FALLÓ LA IA — BORRADOR OFFLINE",
+                "message": f"{selected.upper()} no respondió: {err}",
+                "suggestion": "Corrija la clave o el proveedor y vuelva a traducir. Este borrador mezcla inglés y español.",
+            })
+            qaqc["status"] = "BORRADOR_OFFLINE"
+            return notice + draft, f"Borrador offline ({selected} falló)", qaqc
+
+    # Sin clave: borrador claramente marcado
+    notice = (
+        "ℹ️ [SIN CLAVE DE IA — BORRADOR OFFLINE]\n"
+        "Esta salida usa un diccionario de reemplazo: no es una traducción profesional.\n"
+        "Configure una clave en la barra superior para traducir con IA.\n\n"
+        "--- [BORRADOR — NO USAR COMO DOR FINAL] ---\n\n"
+    )
+    draft = offline_standardized_translation(spanish_text)
+    qaqc = audit_translation_qaqc(draft, spanish_text)
+    qaqc["findings"].insert(0, {
+        "agent": "translation-qaqc", "severity": "warning",
+        "badge": "🟠 MODO OFFLINE SIN IA",
+        "message": "Traducción generada por diccionario local; el texto mezcla inglés y español.",
+        "suggestion": "Ingrese una clave de IA para una traducción real.",
     })
-    return offline_translated, "Motor Offline (Sin Clave IA)", qaqc_result
+    qaqc["status"] = "BORRADOR_OFFLINE"
+    return notice + draft, "Diccionario offline (sin clave)", qaqc
