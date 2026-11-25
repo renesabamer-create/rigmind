@@ -320,7 +320,7 @@ async def index():
     <title>RigMind | Asistente de reportes de pozo</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;600;700&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/app.css?v=5">
+    <link rel="stylesheet" href="/static/app.css?v=6">
 </head>
 <body>
 
@@ -391,10 +391,16 @@ async def index():
 
 
     <!-- 4-BOX MAIN WORKSPACE -->
+    <nav class="mobile-quick-nav" aria-label="Navegación rápida móvil">
+        <a href="#box1Card">1. Crudo</a>
+        <a href="#box2Card">2. Revisar</a>
+        <a href="#box3Card">3. Hallazgos</a>
+        <a href="#box4Card">4. Inglés</a>
+    </nav>
     <div class="grid-4box">
 
         <!-- CAJA 1: ENTRADA CRUDA (ESPAÑOL) -->
-        <div class="card">
+        <div class="card" id="box1Card">
             <div class="card-header">
                 <div class="card-title"><span>📝</span> CAJA 1: Entrada Cruda (Español)</div>
                 <button class="btn" id="btnAuditStage1" onclick="runStage1Audit()">⚡ 1. Auditar Reporte</button>
@@ -409,7 +415,7 @@ async def index():
         </div>
 
         <!-- CAJA 2: REPORTE SANEADO & EDITOR INTERACTIVO (ESPAÑOL) -->
-        <div class="card">
+        <div class="card" id="box2Card">
             <div class="card-header">
                 <div class="card-title"><span>✏️</span> CAJA 2: Reporte Saneado & Auditoría (Español)</div>
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -437,7 +443,7 @@ async def index():
         </div>
 
         <!-- CAJA 3: AUDITORÍA TÉCNICA -->
-        <div class="card">
+        <div class="card" id="box3Card">
             <div class="card-header">
                 <div class="card-title"><span>🔎</span> CAJA 3: Hallazgos y qué falta completar</div>
                 <span class="badge badge-cyan" id="findingsCountBadge">Sin analizar</span>
@@ -456,7 +462,7 @@ async def index():
         </div>
 
         <!-- CAJA 4: TRADUCCIÓN EN INGLÉS -->
-        <div class="card">
+        <div class="card" id="box4Card">
             <div class="card-header">
                 <div class="card-title"><span>🇬🇧</span> CAJA 4: Traducción a inglés de operaciones</div>
                 <div style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -486,7 +492,7 @@ async def index():
 
     </div>
 
-    <script src="/static/app.js?v=5"></script>
+    <script src="/static/app.js?v=6"></script>
 </body>
 </html>"""
     return HTMLResponse(

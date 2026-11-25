@@ -50,7 +50,7 @@
         .badge-amber { background: rgba(245, 158, 11, 0.15); color: var(--amber); border: 1px solid var(--amber); }
         .badge-crimson { background: rgba(239, 68, 68, 0.15); color: var(--crimson); border: 1px solid var(--crimson); }
 
-        .meta-controls { display: flex; align-items: center; gap: 12px; }
+        .meta-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .meta-input {
             background: #0E131A;
             border: 1px solid var(--border);
@@ -437,4 +437,150 @@
             color: var(--cyan);
             white-space: nowrap;
             width: 96px;
+        }
+
+        /* Mobile quick jump bar (hidden on desktop) */
+        .mobile-quick-nav {
+            display: none;
+        }
+
+        /* Responsive & Mobile-First Ergonomics */
+        html {
+            scroll-behavior: smooth;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 8px;
+                padding-bottom: 64px;
+                overflow-x: hidden;
+            }
+            header {
+                padding: 10px 12px;
+                gap: 10px;
+                margin-bottom: 10px;
+            }
+            .logo-area {
+                width: 100%;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .logo-title {
+                font-size: 1.05rem;
+            }
+            .meta-controls {
+                width: 100%;
+                gap: 8px;
+            }
+            .meta-controls > label {
+                font-size: 0.72rem;
+            }
+            .meta-input, .api-input {
+                font-size: 16px;
+                padding: 8px 10px;
+                min-height: 38px;
+            }
+            #historySelect {
+                width: 100%;
+                max-width: 100% !important;
+            }
+            #apiVaultContainer, #apiVaultContainer > div {
+                width: 100%;
+                flex-wrap: wrap;
+            }
+            #apiVaultContainer .api-input {
+                flex: 1;
+                min-width: 120px;
+            }
+            .btn-vault-save, .btn-vault-action {
+                min-height: 38px;
+                padding: 8px 12px;
+                font-size: 0.8rem;
+            }
+            .maturity-bar-wrapper {
+                padding: 10px 12px;
+                gap: 8px;
+                margin-bottom: 10px;
+            }
+            .progress-container {
+                width: 100%;
+                min-width: 100%;
+            }
+            .grid-4box {
+                gap: 12px;
+            }
+            .card {
+                min-height: auto;
+            }
+            .card-header {
+                padding: 10px 12px;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .card-header > div:last-child {
+                width: 100%;
+                justify-content: flex-start;
+            }
+            .card-body {
+                padding: 10px;
+            }
+            .btn {
+                min-height: 40px;
+                padding: 8px 12px;
+                font-size: 0.78rem;
+                flex: 1 1 auto;
+                justify-content: center;
+            }
+            textarea.editor-box {
+                font-size: 16px;
+                min-height: 220px;
+                padding: 10px;
+            }
+            .diff-view-box, .findings-list, .english-box {
+                min-height: 200px;
+                max-height: 360px;
+                font-size: 0.85rem;
+            }
+            .aligned-view-box {
+                overflow-x: auto;
+                max-height: 360px;
+            }
+            .aligned-table {
+                min-width: 480px;
+            }
+            .status-strip {
+                flex-wrap: wrap;
+                gap: 6px;
+            }
+            .chk-row {
+                flex-wrap: wrap;
+            }
+            .mobile-quick-nav {
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 4px;
+                position: fixed;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                z-index: 50;
+                background: #0E131A;
+                border-top: 1px solid var(--border);
+                padding: 6px 8px;
+            }
+            .mobile-quick-nav a {
+                text-align: center;
+                text-decoration: none;
+                color: var(--cyan);
+                background: #121820;
+                border: 1px solid var(--border);
+                border-radius: 4px;
+                padding: 8px 4px;
+                font-family: var(--font-mono);
+                font-size: 0.72rem;
+                font-weight: 700;
+            }
+            .mobile-quick-nav a:active {
+                background: rgba(0, 210, 180, 0.15);
+            }
         }
